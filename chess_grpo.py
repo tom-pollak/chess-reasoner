@@ -244,7 +244,7 @@ def evaluate_move(board: chess.Board, move_str: str) -> float:
         else:
             return 1.0 + (eval_diff / 300.0)
 
-    except Exception as e:
+    except Exception:
         return 0.0
 
 
@@ -275,15 +275,21 @@ def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[f
 
     print("\n--- Generation Summary ---")
     for i in range(len(extracted_moves)):
-        format_symbol = "✓" if i < len(format_results) and format_results[i] else "✗"
+        valid_format = i < len(format_results) and format_results[i]
         xml_score = xml_structure_scores[i] if i < len(xml_structure_scores) else 0.0
         legal = legal_checks[i] if i < len(legal_checks) else False
         valid_uci = valid_uci_checks[i] if i < len(valid_uci_checks) else False
         move = extracted_moves[i]
         quality = move_quality_scores[i]
 
+        symbol_fmt = lambda b: "✓" if b else "✗"
         print(
-            f"Gen {i}: Move: {move or '-'} | Format: {format_symbol} | XML: {xml_score:.2f} | Valid UCI: {valid_uci} | Legal: {legal} | Quality: {quality:.2f}"
+            f"Gen {i}: Move: {move or '-'} | "
+            f"Format: {symbol_fmt(valid_format)} | "
+            f"XML: {xml_score:.2f} | "
+            f"Valid UCI: {symbol_fmt(valid_uci)} | "
+            f"Legal: {symbol_fmt(legal)} | "
+            f"Quality: {quality:.2f}"
         )
 
         logging.info(f"\n==== GENERATION {i} COMPLETE SUMMARY ====")
