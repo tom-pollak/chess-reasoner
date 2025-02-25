@@ -26,9 +26,9 @@ from datasets import Dataset, load_dataset
 # ======== CONFIGURATION PARAMETERS ========
 # Model settings
 MODEL = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
-MAX_SEQ_LENGTH = 1024
+MAX_SEQ_LENGTH = 1536  # Increased to handle longer sequences
 LORA_RANK = 64
-GPU_MEMORY_UTILIZATION = 0.9
+GPU_MEMORY_UTILIZATION = 0.4  # Drastically reduced to avoid OOM errors
 
 # Dataset settings
 NUM_SAMPLES = 1000
@@ -39,13 +39,13 @@ WEIGHT_DECAY = 0.1
 WARMUP_RATIO = 0.1
 BATCH_SIZE = 1
 GRADIENT_ACCUMULATION_STEPS = 8
-NUM_GENERATIONS = 4
+NUM_GENERATIONS = 1  # Reduced to 1 to save memory while allowing longer sequences
 MAX_STEPS = 500
 SAVE_STEPS = 100
 
 # Generation length settings
 MAX_PROMPT_LENGTH = 256
-MAX_COMPLETION_LENGTH = 384  # Increased to ensure model has enough tokens to finish
+MAX_COMPLETION_LENGTH = 768  # Significantly increased to allow for longer reasoning chains
 
 # Reward function weights
 MOVE_QUALITY_WEIGHT = 0.7  # Weight for move correctness reward
@@ -84,7 +84,6 @@ Respond in the following format:
 <think>
 Your analysis here. Keep it brief.
 </think>
-
 e2e4
 
 First your analysis in <think> tags, then just your move in UCI notation (like e2e4) after the </think> tag.
