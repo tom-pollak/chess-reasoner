@@ -80,24 +80,20 @@ print("Chess engine initialized successfully!")
 SYSTEM_PROMPT = """
 You are a chess expert. Given a chess position in FEN notation, analyze it and suggest the best move.
 
-Your response MUST be in this exact format:
+Respond in the following format:
 <think>
-Keep your analysis VERY brief (50 words or less). Focus only on:
-- Material balance
-- Any immediate tactics
-- Why your chosen move is best
+Your analysis here. Keep it brief.
 </think>
 
 e2e4
 
-After the </think> tag, provide ONLY the UCI notation of your move (e.g., e2e4) with nothing else.
+First your analysis in <think> tags, then just your move in UCI notation (like e2e4) after the </think> tag.
 """
 
 XML_FORMAT = """\
 <think>
 {reasoning}
 </think>
-
 {answer}
 """
 
