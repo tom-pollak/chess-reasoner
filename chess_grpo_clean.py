@@ -203,6 +203,11 @@ def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[f
         # Clean up the move string
         move = move.strip()
         
+        # Print the full response and extracted move for debugging
+        print(f"\n----- FULL RESPONSE [{i}] -----")
+        print(responses[i])
+        print(f"----- EXTRACTED MOVE: '{move}' -----")
+        
         # Convert FEN string to board object
         board = chess.Board(board_fen[i])
         
@@ -252,9 +257,18 @@ def legal_move_reward(completions, board_fen, **kwargs) -> List[float]:
     rewards = []
     for i, move in enumerate(extracted_moves):
         move = move.strip()
+        
+        # Print debugging info for this reward function too
+        print(f"\n----- LEGAL MOVE CHECK [{i}] -----")
+        # Print just the first 100 chars of response for brevity
+        print(f"Response preview: {responses[i][:100]}...")
+        print(f"Extracted move: '{move}'")
+        
         # Convert FEN string to board object
         board = chess.Board(board_fen[i])
         legal = is_valid_move(move, board)
+        print(f"Is legal: {legal}")
+        
         wandb.log({"legal_move": 1 if legal else 0})
         rewards.append(0.3 if legal else 0.0)
 
@@ -363,6 +377,7 @@ def train_model(model, tokenizer, train_dataset):
         max_grad_norm=0.1,
         report_to="wandb",
         output_dir="outputs",
+        run_name="chess-reasoner-training",  # Added explicit run name
     )
 
     trainer = GRPOTrainer(
