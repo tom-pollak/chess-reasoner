@@ -189,27 +189,27 @@ def evaluate_move(board: chess.Board, move_str: str, time_limit: float = 0.1) ->
         # Check if move is legal
         if move not in board.legal_moves:
             return 0.0
-            
+
         # Get the initial position evaluation
         initial_result = engine.analyse(board, chess.engine.Limit(time=time_limit))
         best_move = initial_result["pv"][0]
-        
+
         # Create a copy of the board and apply the best move
         best_board = board.copy()
         best_board.push(best_move)
         best_eval = engine.analyse(best_board, chess.engine.Limit(time=time_limit))
         best_score = best_eval["score"].relative.score(mate_score=10000)
-        
+
         # Now evaluate the player's move
         player_board = board.copy()
         player_board.push(move)
         player_eval = engine.analyse(player_board, chess.engine.Limit(time=time_limit))
         player_score = player_eval["score"].relative.score(mate_score=10000)
-        
+
         # Calculate evaluation difference (negative means worse than best move)
         eval_diff = player_score - best_score
-        
-        # Simple linear scaling: 
+
+        # Simple linear scaling:
         # 0 or positive diff = best move (1.0)
         # -100 centipawns = decent move (0.5)
         # -300 centipawns or worse = bad move (0.0)
@@ -220,7 +220,7 @@ def evaluate_move(board: chess.Board, move_str: str, time_limit: float = 0.1) ->
         else:
             # Linear scale from 0.0 to 1.0
             return 1.0 + (eval_diff / 300.0)
-        
+
     except Exception as e:
         print(f"Error evaluating move: {e}")
         return 0.0
@@ -236,18 +236,18 @@ def move_correctness_reward(prompts, completions, board_state, **kwargs) -> List
     extracted_moves = [extract_xml_answer(r) for r in responses]
 
     rewards = []
-    
+
     for move, board in zip(extracted_moves, board_state):
         # Clean up the move string (remove extra spaces, etc.)
         move = move.strip()
 
         # Evaluate the move (returns 0.0-1.0)
         reward = evaluate_move(board, move)
-        
+
         # Apply weight of 0.7 to emphasize move quality in overall reward
         weighted_reward = 0.7 * reward
         rewards.append(weighted_reward)
-        
+
         # Simple quality label based on reward
         quality = "illegal move"
         if reward == 1.0:
@@ -258,7 +258,7 @@ def move_correctness_reward(prompts, completions, board_state, **kwargs) -> List
             quality = "okay move"
         elif reward > 0.0:
             quality = "weak move"
-        
+
         # Log to wandb
         wandb.log({"move_reward": reward, "move_quality": quality})
 
@@ -268,7 +268,7 @@ def move_correctness_reward(prompts, completions, board_state, **kwargs) -> List
         fen = prompts[sample_idx][-1]["content"]
         move = extracted_moves[sample_idx]
         reward = rewards[sample_idx]
-        
+
         # Get best move for comparison
         board = board_state[sample_idx]
         try:
@@ -305,7 +305,7 @@ def legal_move_reward(completions, board_state, **kwargs) -> List[float]:
         # Log to wandb
         wandb.log({"legal_move": 1 if legal else 0})
         rewards.append(0.3 if legal else 0.0)
-        
+
     return rewards
 
 
@@ -372,16 +372,16 @@ def prepare_data_and_model():
         }
 
     train_dataset = dataset.map(format_dataset)
-    
+
     # Convert board_fen back to board objects during training
     original_getitem = train_dataset.__getitem__
-    
+
     def new_getitem(idx):
         item = original_getitem(idx)
         # Convert FEN to board only when needed
         item["board_state"] = chess.Board(item["board_fen"])
         return item
-        
+
     train_dataset.__getitem__ = new_getitem
 
     print("Setting up model...")
@@ -522,7 +522,7 @@ def test_model(model, tokenizer):
             # Try to load the trained LoRA model
             try:
                 lora_request = model.load_lora("chess_reasoner_lora")
-                
+
                 # Generate with our trained LoRA
                 output_lora = (
                     model.fast_generate(
@@ -533,7 +533,7 @@ def test_model(model, tokenizer):
                     .outputs[0]
                     .text
                 )
-                
+
                 # Print results
                 print("\nBase model response:")
                 print(output_base)
@@ -547,11 +547,23 @@ def test_model(model, tokenizer):
                 lora_move = extract_xml_answer(output_lora)
 
                 # Check format correctness
-                base_format = re.search(r"<reasoning>.*?</reasoning>\s*<answer>.*?</answer>", 
-                                      output_base, re.DOTALL) is not None
-                lora_format = re.search(r"<reasoning>.*?</reasoning>\s*<answer>.*?</answer>", 
-                                      output_lora, re.DOTALL) is not None
-                                      
+                base_format = (
+                    re.search(
+                        r"<reasoning>.*?</reasoning>\s*<answer>.*?</answer>",
+                        output_base,
+                        re.DOTALL,
+                    )
+                    is not None
+                )
+                lora_format = (
+                    re.search(
+                        r"<reasoning>.*?</reasoning>\s*<answer>.*?</answer>",
+                        output_lora,
+                        re.DOTALL,
+                    )
+                    is not None
+                )
+
                 print(f"\nBase model format correct: {base_format}")
                 print(f"Fine-tuned model format correct: {lora_format}")
 
@@ -571,27 +583,27 @@ def test_model(model, tokenizer):
                     if lora_legal:
                         lora_score = evaluate_move(board, lora_move)
                         print(f"Fine-tuned model score: {lora_score:.2f}")
-                        
+
                 # Get top engine move for comparison
                 if engine is not None:
                     analysis = engine.analyse(board, chess.engine.Limit(time=0.2))
                     best_move = analysis["pv"][0].uci()
                     print(f"Engine's best move: {best_move}")
-                    
+
             except Exception as e:
                 print(f"Error with LoRA model: {e}")
                 print("Only testing base model...")
                 # Print base model results
                 print("\nBase model response:")
                 print(output_base)
-                
+
                 board = chess.Board(fen)
                 base_move = extract_xml_answer(output_base)
                 print(f"\nBase model move: {base_move}")
                 if base_move and is_valid_move(base_move, board):
                     base_score = evaluate_move(board, base_move)
                     print(f"Base model score: {base_score:.2f}")
-                    
+
         except Exception as e:
             print(f"Error testing position: {e}")
 
