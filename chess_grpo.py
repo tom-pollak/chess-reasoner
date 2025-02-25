@@ -42,12 +42,12 @@ legal_checks = []
 valid_uci_checks = []
 
 # ======== CONFIGURATION PARAMETERS ========
+# fmt: off
 # Model settings
-# MODEL = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
 MODEL = "Qwen/Qwen2.5-3B-Instruct"
-MAX_SEQ_LENGTH = 1024  # Back to original setting
-LORA_RANK = 8  # Reduced to save memory
-GPU_MEMORY_UTILIZATION = 0.8  # Slightly reduced from original
+MAX_SEQ_LENGTH = 1024
+LORA_RANK = 8
+GPU_MEMORY_UTILIZATION = 0.8
 
 # Dataset settings
 NUM_SAMPLES = 1000
@@ -67,13 +67,14 @@ MAX_PROMPT_LENGTH = 256
 MAX_COMPLETION_LENGTH = 512
 
 # Reward function weights
-FORMAT_REWARD_WEIGHT = 0.1  # Basic XML format (easiest)
-UCI_FORMAT_WEIGHT = 0.2    # Valid UCI notation
-LEGAL_MOVE_WEIGHT = 0.4    # Legal move (harder)
-MOVE_QUALITY_WEIGHT = 0.7  # Good move quality (hardest)
+FORMAT_REWARD_WEIGHT = 0.1  # Basic XML format
+UCI_FORMAT_WEIGHT = 0.2     # Valid UCI notation
+LEGAL_MOVE_WEIGHT = 0.4     # Legal move
+MOVE_QUALITY_WEIGHT = 0.7   # Good move quality
 
 # Engine settings
 ENGINE_ANALYSIS_TIME = 0.1  # Time limit for engine analysis in seconds
+# fmt: on
 # =========================================
 
 from unsloth import FastLanguageModel, PatchFastRL
@@ -336,19 +337,19 @@ def legal_move_reward(completions, board_fen, **kwargs) -> List[float]:
     for i, move in enumerate(extracted_moves):
         move = move.strip()
         board = chess.Board(board_fen[i])
-        
+
         # Check if move is valid UCI format
         valid_uci = is_valid_uci_format(move)
         valid_uci_results.append(valid_uci)
-        
+
         # Check if move is legal in this position
         legal = is_valid_move(move, board)
         legality_results.append(legal)
-        
+
         # Log metrics
         wandb.log({"legal_move": 1 if legal else 0})
         wandb.log({"valid_uci_format": 1 if valid_uci else 0})
-        
+
         # Give full reward for legal moves, partial reward for valid UCI format
         if legal:
             reward = LEGAL_MOVE_WEIGHT
@@ -356,7 +357,7 @@ def legal_move_reward(completions, board_fen, **kwargs) -> List[float]:
             reward = UCI_FORMAT_WEIGHT
         else:
             reward = 0.0
-            
+
         rewards.append(reward)
 
     global legal_checks, valid_uci_checks
