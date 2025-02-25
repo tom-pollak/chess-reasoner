@@ -72,6 +72,13 @@ except Exception as e:
 SYSTEM_PROMPT = """
 You are a chess expert. Given a chess position in FEN notation, you will analyze the position and suggest the best move.
 
+In your analysis:
+1. Assess the position's key features (material, pawn structure, king safety)
+2. Identify tactical opportunities (forks, pins, discovered attacks)
+3. Consider strategic plans based on the position
+4. Calculate concrete variations when needed
+5. Compare candidate moves and evaluate their strengths and weaknesses
+
 Respond in the following format:
 <reasoning>
 [Your step-by-step analysis of the position, considering tactics, strategy, and possible continuations]
@@ -99,7 +106,8 @@ def extract_xml_answer(text: str) -> str:
         answer = text.split("<answer>")[-1]
         answer = answer.split("</answer>")[0]
         return answer.strip()
-    except:
+    except Exception as e:
+        print(f"Error extracting answer: {e}")
         return ""
 
 
@@ -139,7 +147,6 @@ def prepare_chess_dataset(num_samples: int = 1000) -> Dataset:
     dataset = load_dataset("Icannos/lichess_games", streaming=True)
 
     positions = []
-    boards = []
 
     # Get random positions from games
     count = 0
@@ -147,19 +154,17 @@ def prepare_chess_dataset(num_samples: int = 1000) -> Dataset:
         if count >= num_samples:
             break
         try:
-            fen, board = get_random_position(row)
+            fen, _ = get_random_position(row)
             positions.append(fen)
-            boards.append(board)
             count += 1
             if count % 100 == 0:
                 print(f"Processed {count} games...")
         except Exception as e:
             print(f"Error in game {count}: {e}")
 
-    # Create Dataset with FEN positions
+    # Create Dataset with FEN positions only (more memory efficient)
     data_dict = {
         "fen": positions,
-        "board_state": boards,
     }
 
     return Dataset.from_dict(data_dict)
@@ -168,8 +173,8 @@ def prepare_chess_dataset(num_samples: int = 1000) -> Dataset:
 # Function to evaluate a chess move using the engine
 def evaluate_move(board: chess.Board, move_str: str, time_limit: float = 0.1) -> float:
     """
-    Evaluate a chess move using Stockfish engine
-    Returns a score between 0 and 1, where 1 is the best move
+    Evaluate a chess move using Stockfish engine by comparing position evaluation
+    before and after the move. Returns a score between 0 and 1.
     """
     if engine is None:
         # If no engine, return random score as fallback
@@ -182,23 +187,38 @@ def evaluate_move(board: chess.Board, move_str: str, time_limit: float = 0.1) ->
         # Check if move is legal
         if move not in board.legal_moves:
             return 0.0
-
-        # Get top 3 moves from engine
-        result = engine.analyse(board, chess.engine.Limit(time=time_limit), multipv=3)
-        best_moves = [entry["pv"][0] for entry in result]
-
-        # If the move matches the best engine move
-        if move == best_moves[0]:
+            
+        # Get the initial position evaluation
+        initial_result = engine.analyse(board, chess.engine.Limit(time=time_limit))
+        best_move = initial_result["pv"][0]
+        
+        # Create a copy of the board and apply the best move
+        best_board = board.copy()
+        best_board.push(best_move)
+        best_eval = engine.analyse(best_board, chess.engine.Limit(time=time_limit))
+        best_score = best_eval["score"].relative.score(mate_score=10000)
+        
+        # Now evaluate the player's move
+        player_board = board.copy()
+        player_board.push(move)
+        player_eval = engine.analyse(player_board, chess.engine.Limit(time=time_limit))
+        player_score = player_eval["score"].relative.score(mate_score=10000)
+        
+        # Calculate evaluation difference (negative means worse than best move)
+        eval_diff = player_score - best_score
+        
+        # Simple linear scaling: 
+        # 0 or positive diff = best move (1.0)
+        # -100 centipawns = decent move (0.5)
+        # -300 centipawns or worse = bad move (0.0)
+        if eval_diff >= 0:
             return 1.0
-        # If it's the second best move
-        elif len(best_moves) > 1 and move == best_moves[1]:
-            return 0.7
-        # If it's the third best move
-        elif len(best_moves) > 2 and move == best_moves[2]:
-            return 0.4
-
-        # If move is legal but not in top 3
-        return 0.1
+        elif eval_diff < -300:
+            return 0.0
+        else:
+            # Linear scale from 0.0 to 1.0
+            return 1.0 + (eval_diff / 300.0)
+        
     except Exception as e:
         print(f"Error evaluating move: {e}")
         return 0.0
@@ -206,29 +226,58 @@ def evaluate_move(board: chess.Board, move_str: str, time_limit: float = 0.1) ->
 
 # Reward functions for GRPO
 def move_correctness_reward(prompts, completions, board_state, **kwargs) -> List[float]:
-    """Reward based on how good the suggested move is according to the engine"""
+    """
+    Reward based on how good the suggested move is according to the engine.
+    Uses position evaluation difference before and after the move.
+    """
     responses = [completion[0]["content"] for completion in completions]
     extracted_moves = [extract_xml_answer(r) for r in responses]
 
     rewards = []
+    
     for move, board in zip(extracted_moves, board_state):
         # Clean up the move string (remove extra spaces, etc.)
         move = move.strip()
 
-        # Evaluate the move
+        # Evaluate the move (returns 0.0-1.0)
         reward = evaluate_move(board, move)
-        rewards.append(reward)
+        
+        # Apply weight of 0.7 to emphasize move quality in overall reward
+        weighted_reward = 0.7 * reward
+        rewards.append(weighted_reward)
+        
+        # Simple quality label based on reward
+        quality = "illegal move"
+        if reward == 1.0:
+            quality = "best move"
+        elif reward >= 0.7:
+            quality = "good move"
+        elif reward >= 0.3:
+            quality = "okay move"
+        elif reward > 0.0:
+            quality = "weak move"
+        
+        # Log to wandb
+        wandb.log({"move_reward": reward, "move_quality": quality})
 
-    # Log a sample for debugging
+    # Log one sample for debugging
     if len(rewards) > 0:
         sample_idx = random.randint(0, len(rewards) - 1)
         fen = prompts[sample_idx][-1]["content"]
-        response = responses[sample_idx]
         move = extracted_moves[sample_idx]
         reward = rewards[sample_idx]
-        print(f"\nPosition: {fen}")
-        print(f"Response:\n{response}")
-        print(f"Move: {move}, Reward: {reward}")
+        
+        # Get best move for comparison
+        board = board_state[sample_idx]
+        try:
+            if engine is not None:
+                analysis = engine.analyse(board, chess.engine.Limit(time=0.1))
+                best_move = analysis["pv"][0].uci()
+                print(f"\nPosition: {fen}")
+                print(f"Move: {move}, Reward: {reward:.2f}")
+                print(f"Engine's best move: {best_move}")
+        except Exception as e:
+            print(f"Error in logging: {e}")
 
     return rewards
 
@@ -243,22 +292,41 @@ def is_valid_move(move_str: str, board: chess.Board) -> bool:
 
 
 def legal_move_reward(completions, board_state, **kwargs) -> List[float]:
-    """Reward function that checks if the move is legal"""
+    """Reward function that checks if the move is legal (weight: 0.3)"""
     responses = [completion[0]["content"] for completion in completions]
     extracted_moves = [extract_xml_answer(r) for r in responses]
 
-    return [
-        0.2 if is_valid_move(move, board) else 0.0
-        for move, board in zip(extracted_moves, board_state)
-    ]
+    rewards = []
+    for move, board in zip(extracted_moves, board_state):
+        move = move.strip()
+        legal = is_valid_move(move, board)
+        # Log to wandb
+        wandb.log({"legal_move": 1 if legal else 0})
+        rewards.append(0.3 if legal else 0.0)
+        
+    return rewards
 
 
-def format_reward_func(completions, **kwargs) -> List[float]:
+def soft_format_reward_func(completions, **kwargs) -> List[float]:
     """Reward function that checks if the completion has the correct format"""
     pattern = r"<reasoning>.*?</reasoning>\s*<answer>.*?</answer>"
     responses = [completion[0]["content"] for completion in completions]
     matches = [re.search(pattern, r, re.DOTALL) is not None for r in responses]
+    # Log format success
+    for i, match in enumerate(matches):
+        wandb.log({"format_correct": 1 if match else 0})
     return [0.3 if match else 0.0 for match in matches]
+
+
+def strict_format_reward_func(completions, **kwargs) -> List[float]:
+    """Reward function that checks if the completion has a more precise format with newlines"""
+    pattern = r"<reasoning>\n.*?\n</reasoning>\n<answer>\n.*?\n</answer>"
+    responses = [completion[0]["content"] for completion in completions]
+    matches = [re.search(pattern, r, re.DOTALL) is not None for r in responses]
+    # Log strict format success
+    for i, match in enumerate(matches):
+        wandb.log({"strict_format_correct": 1 if match else 0})
+    return [0.2 if match else 0.0 for match in matches]
 
 
 def count_xml(text) -> float:
@@ -284,8 +352,8 @@ def xmlcount_reward_func(completions, **kwargs) -> List[float]:
 # Main function to prepare dataset and model
 def prepare_data_and_model():
     print("Preparing dataset...")
-    # Load a smaller dataset for testing, increase for full training
-    dataset = prepare_chess_dataset(num_samples=200)
+    # Increase sample size for better training
+    dataset = prepare_chess_dataset(num_samples=1000)
 
     # Prepare the dataset for training with prompts
     def format_dataset(example):
@@ -297,10 +365,22 @@ def prepare_data_and_model():
                     "content": f"Analyze this chess position and give the best move: {example['fen']}",
                 },
             ],
-            "board_state": example["board_state"],
+            # Store only FEN string, not board object (more memory efficient)
+            "board_fen": example["fen"],
         }
 
     train_dataset = dataset.map(format_dataset)
+    
+    # Convert board_fen back to board objects during training
+    original_getitem = train_dataset.__getitem__
+    
+    def new_getitem(idx):
+        item = original_getitem(idx)
+        # Convert FEN to board only when needed
+        item["board_state"] = chess.Board(item["board_fen"])
+        return item
+        
+    train_dataset.__getitem__ = new_getitem
 
     print("Setting up model...")
     # Model parameters
@@ -314,7 +394,7 @@ def prepare_data_and_model():
         load_in_4bit=True,
         fast_inference=True,
         max_lora_rank=lora_rank,
-        gpu_memory_utilization=0.8,
+        gpu_memory_utilization=0.7,  # Slightly lower to avoid OOM
     )
 
     model = FastLanguageModel.get_peft_model(
@@ -353,15 +433,17 @@ def train_model(model, tokenizer, train_dataset):
         logging_steps=1,
         bf16=is_bfloat16_supported(),
         fp16=not is_bfloat16_supported(),
-        per_device_train_batch_size=1,
+        per_device_train_batch_size=2,  # Increased from 1 for better efficiency
         gradient_accumulation_steps=4,
         num_generations=8,
         max_prompt_length=256,
-        max_completion_length=200,
-        num_train_epochs=3,
+        max_completion_length=256,
+        # Use max_steps instead of num_train_epochs for better control
+        max_steps=500,  # Reduced for faster iteration
         save_steps=100,
+        save_total_limit=3,  # Keep only 3 checkpoints to save space
         max_grad_norm=0.1,
-        report_to="wandb",  # Report to wandb
+        report_to="wandb",
         output_dir="outputs",
     )
 
@@ -370,7 +452,8 @@ def train_model(model, tokenizer, train_dataset):
         processing_class=tokenizer,
         reward_funcs=[
             xmlcount_reward_func,
-            format_reward_func,
+            soft_format_reward_func,
+            strict_format_reward_func,
             legal_move_reward,
             move_correctness_reward,
         ],
@@ -403,71 +486,112 @@ def test_model(model, tokenizer):
         prompt = f"Analyze this chess position and give the best move: {fen}"
         print(f"\nPosition: {fen}")
 
-        # Format with chat template
-        text = tokenizer.apply_chat_template(
-            [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-
-        # Generate with our trained LoRA
-        from vllm import SamplingParams
-
-        sampling_params = SamplingParams(
-            temperature=0.7,
-            top_p=0.95,
-            max_tokens=1024,
-        )
-
-        # Generate without LoRA
-        output_base = (
-            model.fast_generate(
-                [text],
-                sampling_params=sampling_params,
-                lora_request=None,
-            )[0]
-            .outputs[0]
-            .text
-        )
-
-        # Generate with our trained LoRA
-        output_lora = (
-            model.fast_generate(
-                [text],
-                sampling_params=sampling_params,
-                lora_request=model.load_lora("chess_reasoner_lora"),
-            )[0]
-            .outputs[0]
-            .text
-        )
-
-        # Print results
-        print("\nBase model response:")
-        print(output_base)
-
-        print("\nFine-tuned model response:")
-        print(output_lora)
-
-        # Evaluate the suggested move
         try:
-            board = chess.Board(fen)
-            base_move = extract_xml_answer(output_base)
-            lora_move = extract_xml_answer(output_lora)
+            # Format with chat template
+            text = tokenizer.apply_chat_template(
+                [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
 
-            print(f"\nBase model move: {base_move}")
-            if base_move:
-                base_score = evaluate_move(board, base_move)
-                print(f"Base model score: {base_score:.2f}")
+            # Generate with our trained LoRA
+            from vllm import SamplingParams
 
-            print(f"Fine-tuned model move: {lora_move}")
-            if lora_move:
-                lora_score = evaluate_move(board, lora_move)
-                print(f"Fine-tuned model score: {lora_score:.2f}")
+            sampling_params = SamplingParams(
+                temperature=0.7,
+                top_p=0.95,
+                max_tokens=1024,
+            )
+
+            # Generate without LoRA
+            output_base = (
+                model.fast_generate(
+                    [text],
+                    sampling_params=sampling_params,
+                    lora_request=None,
+                )[0]
+                .outputs[0]
+                .text
+            )
+
+            # Try to load the trained LoRA model
+            try:
+                lora_request = model.load_lora("chess_reasoner_lora")
+                
+                # Generate with our trained LoRA
+                output_lora = (
+                    model.fast_generate(
+                        [text],
+                        sampling_params=sampling_params,
+                        lora_request=lora_request,
+                    )[0]
+                    .outputs[0]
+                    .text
+                )
+                
+                # Print results
+                print("\nBase model response:")
+                print(output_base)
+
+                print("\nFine-tuned model response:")
+                print(output_lora)
+
+                # Evaluate both models
+                board = chess.Board(fen)
+                base_move = extract_xml_answer(output_base)
+                lora_move = extract_xml_answer(output_lora)
+
+                # Check format correctness
+                base_format = re.search(r"<reasoning>.*?</reasoning>\s*<answer>.*?</answer>", 
+                                      output_base, re.DOTALL) is not None
+                lora_format = re.search(r"<reasoning>.*?</reasoning>\s*<answer>.*?</answer>", 
+                                      output_lora, re.DOTALL) is not None
+                                      
+                print(f"\nBase model format correct: {base_format}")
+                print(f"Fine-tuned model format correct: {lora_format}")
+
+                # Check move correctness
+                print(f"\nBase model move: {base_move}")
+                if base_move:
+                    base_legal = is_valid_move(base_move, board)
+                    print(f"Base model move legal: {base_legal}")
+                    if base_legal:
+                        base_score = evaluate_move(board, base_move)
+                        print(f"Base model score: {base_score:.2f}")
+
+                print(f"Fine-tuned model move: {lora_move}")
+                if lora_move:
+                    lora_legal = is_valid_move(lora_move, board)
+                    print(f"Fine-tuned model move legal: {lora_legal}")
+                    if lora_legal:
+                        lora_score = evaluate_move(board, lora_move)
+                        print(f"Fine-tuned model score: {lora_score:.2f}")
+                        
+                # Get top engine move for comparison
+                if engine is not None:
+                    analysis = engine.analyse(board, chess.engine.Limit(time=0.2))
+                    best_move = analysis["pv"][0].uci()
+                    print(f"Engine's best move: {best_move}")
+                    
+            except Exception as e:
+                print(f"Error with LoRA model: {e}")
+                print("Only testing base model...")
+                # Print base model results
+                print("\nBase model response:")
+                print(output_base)
+                
+                board = chess.Board(fen)
+                base_move = extract_xml_answer(output_base)
+                print(f"\nBase model move: {base_move}")
+                if base_move and is_valid_move(base_move, board):
+                    base_score = evaluate_move(board, base_move)
+                    print(f"Base model score: {base_score:.2f}")
+                    
         except Exception as e:
-            print(f"Error evaluating moves: {e}")
+            print(f"Error testing position: {e}")
 
 
 # Main execution
