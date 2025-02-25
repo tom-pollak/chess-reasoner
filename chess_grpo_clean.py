@@ -26,9 +26,9 @@ from datasets import Dataset, load_dataset
 # ======== CONFIGURATION PARAMETERS ========
 # Model settings
 MODEL = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
-MAX_SEQ_LENGTH = 1536  # Increased to handle longer sequences
-LORA_RANK = 64
-GPU_MEMORY_UTILIZATION = 0.4  # Drastically reduced to avoid OOM errors
+MAX_SEQ_LENGTH = 1024  # Back to original setting
+LORA_RANK = 8  # Reduced to save memory
+GPU_MEMORY_UTILIZATION = 0.8  # Slightly reduced from original
 
 # Dataset settings
 NUM_SAMPLES = 1000
@@ -45,7 +45,7 @@ SAVE_STEPS = 100
 
 # Generation length settings
 MAX_PROMPT_LENGTH = 256
-MAX_COMPLETION_LENGTH = 768  # Significantly increased to allow for longer reasoning chains
+MAX_COMPLETION_LENGTH = 1024
 
 # Reward function weights
 MOVE_QUALITY_WEIGHT = 0.7  # Weight for move correctness reward
