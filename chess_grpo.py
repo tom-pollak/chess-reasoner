@@ -245,7 +245,6 @@ def evaluate_move(board: chess.Board, move_str: str) -> float:
             return 1.0 + (eval_diff / 300.0)
 
     except Exception as e:
-        print(f"Error evaluating move: {e}")
         return 0.0
 
 
