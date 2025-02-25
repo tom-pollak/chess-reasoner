@@ -23,8 +23,10 @@ import torch
 import wandb
 from datasets import Dataset, load_dataset
 
+MODEL = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+
 # Initialize wandb
-wandb.init(project="chess-reasoner", name="qwen-2.5-3b-chess-grpo")
+wandb.init(project="chess-reasoner", name=f"{MODEL.split('/')[-1]}-chess-grpo")
 
 # Setup Unsloth with GRPO
 from unsloth import FastLanguageModel, PatchFastRL
@@ -389,7 +391,7 @@ def prepare_data_and_model():
 
     # Load the Qwen 2.5 3B model with LoRA
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name="Qwen/Qwen2.5-3B-Instruct",
+        model_name=MODEL,
         max_seq_length=max_seq_length,
         load_in_4bit=True,
         fast_inference=True,
