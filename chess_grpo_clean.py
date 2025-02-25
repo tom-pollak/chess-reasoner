@@ -77,10 +77,10 @@ def extract_answer(text: str) -> str:
     if "</think>" not in text:
         return ""
     try:
-        # Get the text after the closing </think> tag
+        # Get the text after the closing </think> tag and remove all whitespace
         answer = text.split("</think>")[-1].strip()
-        # Take the first line of text after </think>
-        answer = answer.split("\n")[0].strip()
+        # Remove all newlines and extra whitespace
+        answer = "".join(answer.split())
         return answer
     except Exception as e:
         print(f"Error extracting answer: {e}")
