@@ -56,9 +56,9 @@ NUM_SAMPLES = 10_000
 LEARNING_RATE = 5e-6
 WEIGHT_DECAY = 0.1
 WARMUP_RATIO = 0.1
-BATCH_SIZE = 1
-GRADIENT_ACCUMULATION_STEPS = 2
-NUM_GENERATIONS = 4
+BATCH_SIZE = 2
+GRADIENT_ACCUMULATION_STEPS = 1
+NUM_GENERATIONS = 8
 MAX_STEPS = 10_000
 SAVE_STEPS = 1000
 
@@ -167,7 +167,7 @@ def prepare_chess_dataset() -> Dataset:
     Gets a random position
 
     """
-    dataset = load_dataset("Icannos/lichess_games", streaming=True)
+    dataset = load_dataset("Icannos/lichess_games", streaming=True, trust_remote_code=True)
     positions = []
     count = 0
     for row in dataset["train"]:
