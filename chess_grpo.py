@@ -283,7 +283,7 @@ def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[f
         print(
             f"Gen {i}: Move: {move or '-'} | "
             f"Format: {symbol_fmt(valid_format)} | "
-            f"XML: {xml_score:.2f} | "
+            f"XML: {symbol_fmt(xml_score == XML_COUNT_REWARD_WEIGHT)} | "
             f"Valid UCI: {symbol_fmt(valid_uci)} | "
             f"Legal: {symbol_fmt(legal)} | "
             f"Quality: {quality:.2f}"
