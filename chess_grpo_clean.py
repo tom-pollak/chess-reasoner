@@ -25,7 +25,8 @@ from datasets import Dataset, load_dataset
 
 # ======== CONFIGURATION PARAMETERS ========
 # Model settings
-MODEL = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
+# MODEL = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
+MODEL = "Qwen/Qwen2.5-3B-Instruct"
 MAX_SEQ_LENGTH = 1024  # Back to original setting
 LORA_RANK = 8  # Reduced to save memory
 GPU_MEMORY_UTILIZATION = 0.8  # Slightly reduced from original
@@ -45,7 +46,7 @@ SAVE_STEPS = 100
 
 # Generation length settings
 MAX_PROMPT_LENGTH = 256
-MAX_COMPLETION_LENGTH = 1024
+MAX_COMPLETION_LENGTH = 512
 
 # Reward function weights
 MOVE_QUALITY_WEIGHT = 0.7  # Weight for move correctness reward
