@@ -75,7 +75,15 @@ XML_FORMAT = """\
 """
 
 
-def extract_xml_answer(text: str) -> str:
+def extract_xml_answer(text: Union[str, List]) -> str:
+    if isinstance(text, list):
+        print(f"ERROR: Received a list instead of a string!")
+        # Try to handle the list case
+        if text and isinstance(text[0], str):
+            text = text[0]
+        else:
+            return ""
+    
     if "<answer>" not in text or "</answer>" not in text:
         return ""
     try:
@@ -417,7 +425,12 @@ def train_model(model, tokenizer, train_dataset):
     )
 
     print("Starting training...")
-    trainer.train()
+    try:
+        trainer.train()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise e
 
     # Save the trained model
     model.save_lora("chess_reasoner_lora")
