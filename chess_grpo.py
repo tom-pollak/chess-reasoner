@@ -67,13 +67,14 @@ MAX_PROMPT_LENGTH = 256
 MAX_COMPLETION_LENGTH = 512
 
 # Reward function weights
-FORMAT_REWARD_WEIGHT = 0.1  # Basic XML format
-UCI_FORMAT_WEIGHT = 0.2     # Valid UCI notation
-LEGAL_MOVE_WEIGHT = 0.4     # Legal move
-MOVE_QUALITY_WEIGHT = 0.7   # Good move quality
+XML_COUNT_REWARD_WEIGHT = 0.05   # Has think tags
+SOFT_FORMAT_REWARD_WEIGHT = 0.1  # Basic XML format
+UCI_FORMAT_WEIGHT = 0.25         # Valid UCI notation
+LEGAL_MOVE_WEIGHT = 0.5          # Legal move
+MOVE_QUALITY_WEIGHT = 1.         # Good move quality
 
 # Engine settings
-ENGINE_ANALYSIS_TIME = 0.1  # Time limit for engine analysis in seconds
+ENGINE_ANALYSIS_TIME = 0.2  # Time limit for engine analysis in seconds
 # fmt: on
 # =========================================
 
@@ -261,17 +262,13 @@ def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[f
     responses = [completion[0]["content"] for completion in completions]
     extracted_moves = [extract_answer(r) for r in responses]
 
-    rewards = []
-    move_quality_scores = []
+    move_rewards = []
 
     for i, move in enumerate(extracted_moves):
         move = move.strip()
         board = chess.Board(board_fen[i])
-        reward = evaluate_move(board, move)
-        move_quality_scores.append(reward)
-        weighted_reward = MOVE_QUALITY_WEIGHT * reward
-        rewards.append(weighted_reward)
-        wandb.log({"move_reward": reward})
+        reward = evaluate_move(board, move) * MOVE_QUALITY_WEIGHT
+        move_rewards.append(reward)
 
     print("\n--- Generation Summary ---")
     for i in range(len(extracted_moves)):
@@ -280,7 +277,7 @@ def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[f
         legal = legal_checks[i] if i < len(legal_checks) else False
         valid_uci = valid_uci_checks[i] if i < len(valid_uci_checks) else False
         move = extracted_moves[i]
-        quality = move_quality_scores[i]
+        quality = move_rewards[i]
 
         symbol_fmt = lambda b: "✓" if b else "✗"
         print(
@@ -313,100 +310,78 @@ def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[f
             logging.info(f"ENGINE'S BEST MOVE: {best_move}")
         logging.info("=" * 40)
 
-    wandb.log(
-        {
-            "avg_quality": sum(move_quality_scores) / max(1, len(move_quality_scores)),
-            "avg_xml_score": sum(xml_structure_scores)
-            / max(1, len(xml_structure_scores)),
-            "format_correct_pct": sum(1 for f in format_results if f)
-            / max(1, len(format_results)),
-            "valid_uci_pct": sum(1 for u in valid_uci_checks if u)
-            / max(1, len(valid_uci_checks)),
-            "legal_moves_pct": sum(1 for l in legal_checks if l)
-            / max(1, len(legal_checks)),
-        }
-    )
-
-    return rewards
+    return move_rewards
 
 
 def legal_move_reward(completions, board_fen, **kwargs) -> List[float]:
-    """Reward function that checks if the move is legal and/or valid UCI format"""
+    """Reward function that checks if the move is legal"""
     responses = [completion[0]["content"] for completion in completions]
     extracted_moves = [extract_answer(r) for r in responses]
 
     rewards = []
     legality_results = []
+
+    for i, move in enumerate(extracted_moves):
+        move = move.strip()
+        board = chess.Board(board_fen[i])
+
+        legal = is_valid_move(move, board)
+        rewards.append(LEGAL_MOVE_WEIGHT if legal else 0.0)
+        legality_results.append(legal)
+
+    global legal_checks
+    legal_checks = legality_results
+
+    return rewards
+
+def valid_uci_reward() -> List[float]:
+    """Reward function that checks if the move is a valid UCI format"""
+    responses = [completion[0]["content"] for completion in completions]
+    extracted_moves = [extract_answer(r) for r in responses]
+
+    rewards = []
     valid_uci_results = []
 
     for i, move in enumerate(extracted_moves):
         move = move.strip()
         board = chess.Board(board_fen[i])
 
-        # Check if move is valid UCI format
         valid_uci = is_valid_uci_format(move)
         valid_uci_results.append(valid_uci)
+        rewards.append(UCI_FORMAT_WEIGHT if valid_uci else 0.0)
 
-        # Check if move is legal in this position
-        legal = is_valid_move(move, board)
-        legality_results.append(legal)
-
-        # Log metrics
-        wandb.log({"legal_move": 1 if legal else 0})
-        wandb.log({"valid_uci_format": 1 if valid_uci else 0})
-
-        # Give full reward for legal moves, partial reward for valid UCI format
-        if legal:
-            reward = LEGAL_MOVE_WEIGHT
-        elif valid_uci:
-            reward = UCI_FORMAT_WEIGHT
-        else:
-            reward = 0.0
-
-        rewards.append(reward)
-
-    global legal_checks, valid_uci_checks
-    legal_checks = legality_results
+    global valid_uci_checks
     valid_uci_checks = valid_uci_results
 
     return rewards
 
 
-def soft_format_reward_func(completions, **kwargs) -> List[float]:
+def soft_format_reward(completions, **kwargs) -> List[float]:
     """Reward function that checks if the completion has the correct format"""
     pattern = r"<think>.*?</think>\s*\S+"  # <think> tags followed by non-whitespace (the move)
     responses = [completion[0]["content"] for completion in completions]
     matches = [re.search(pattern, r, re.DOTALL) is not None for r in responses]
 
-    for match in matches:
-        wandb.log({"format_correct": 1 if match else 0})
-
     global format_results
     format_results = matches
 
-    return [FORMAT_REWARD_WEIGHT if match else 0.0 for match in matches]
+    return [SOFT_FORMAT_REWARD_WEIGHT if match else 0.0 for match in matches]
 
 
 def count_xml(text) -> float:
     """Count XML tags for partial reward"""
-    count = 0.0
+    count = 0
     if "<think>" in text:
-        count += 0.15
+        count += XML_COUNT_REWARD_WEIGHT / 2
     if "</think>" in text:
-        count += 0.15
-    # Check if there's content after </think>
-    if "</think>" in text and text.split("</think>")[-1].strip():
-        count += 0.2
+        count += XML_COUNT_REWARD_WEIGHT / 2
     return count
 
 
-def xmlcount_reward_func(completions, **kwargs) -> List[float]:
+def xmlcount_reward(completions, **kwargs) -> List[float]:
     """Reward function for having correct XML tags"""
     contents = [completion[0]["content"] for completion in completions]
     rewards = [count_xml(c) for c in contents]
-
-    for reward in rewards:
-        wandb.log({"xml_structure_score": reward})
 
     global xml_structure_scores
     xml_structure_scores = rewards
@@ -500,9 +475,10 @@ def train_model(model, tokenizer, train_dataset):
         model=model,
         processing_class=tokenizer,
         reward_funcs=[
-            xmlcount_reward_func,
-            soft_format_reward_func,
+            xmlcount_reward,
+            soft_format_reward,
             legal_move_reward,
+            valid_uci_reward,
             move_correctness_reward,
         ],
         args=training_args,
@@ -522,133 +498,7 @@ def train_model(model, tokenizer, train_dataset):
 
     return model
 
-
-# Test the model on some example positions
-def test_model(model, tokenizer):
-    # Test positions
-    test_positions = [
-        chess.STARTING_FEN,  # Starting position
-        "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3",  # Common position after 1.e4 e5 2.Nf3 Nc6
-        "rnbqkb1r/pp2pppp/3p1n2/2p5/4P3/2N2N2/PPPP1PPP/R1BQKB1R w KQkq - 0 4",  # Sicilian Defense
-    ]
-
-    print("\nTesting model on example positions...")
-
-    for fen in test_positions:
-        prompt = f"Analyze this chess position and give the best move: {fen}"
-        print(f"\nPosition: {fen}")
-
-        # Format with chat template
-        text = tokenizer.apply_chat_template(
-            [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-
-        # Generation parameters
-        from vllm import SamplingParams
-
-        sampling_params = SamplingParams(
-            temperature=0.5,  # Lower temperature for more deterministic outputs
-            top_p=0.95,
-            max_tokens=MAX_COMPLETION_LENGTH,  # Match the training completion length
-        )
-
-        # Generate without LoRA
-        output_base = (
-            model.fast_generate(
-                [text],
-                sampling_params=sampling_params,
-                lora_request=None,
-            )[0]
-            .outputs[0]
-            .text
-        )
-
-        lora_request = model.load_lora("chess_reasoner_llama_8b_lora")
-
-        # Generate with our trained LoRA
-        output_lora = (
-            model.fast_generate(
-                [text],
-                sampling_params=sampling_params,
-                lora_request=lora_request,
-            )[0]
-            .outputs[0]
-            .text
-        )
-
-        # Print results
-        print("\nBase model response:")
-        print(output_base)
-
-        print("\nFine-tuned model response:")
-        print(output_lora)
-
-        # Evaluate both models
-        board = chess.Board(fen)
-        base_move = extract_answer(output_base)
-        lora_move = extract_answer(output_lora)
-
-        # Check format correctness
-        base_format = (
-            re.search(
-                r"<think>.*?</think>\s*\S+",
-                output_base,
-                re.DOTALL,
-            )
-            is not None
-        )
-        lora_format = (
-            re.search(
-                r"<think>.*?</think>\s*\S+",
-                output_lora,
-                re.DOTALL,
-            )
-            is not None
-        )
-
-        print(f"\nBase model format correct: {base_format}")
-        print(f"Fine-tuned model format correct: {lora_format}")
-
-        # Check move correctness
-        print(f"\nBase model move: {base_move}")
-        if base_move:
-            base_legal = is_valid_move(base_move, board)
-            print(f"Base model move legal: {base_legal}")
-            if base_legal:
-                base_score = evaluate_move(board, base_move)
-                print(f"Base model score: {base_score:.2f}")
-
-        print(f"Fine-tuned model move: {lora_move}")
-        if lora_move:
-            lora_legal = is_valid_move(lora_move, board)
-            print(f"Fine-tuned model move legal: {lora_legal}")
-            if lora_legal:
-                lora_score = evaluate_move(board, lora_move)
-                print(f"Fine-tuned model score: {lora_score:.2f}")
-
-        # Get top engine move for comparison
-        if engine is not None:
-            analysis = engine.analyse(
-                board, chess.engine.Limit(time=ENGINE_ANALYSIS_TIME)
-            )
-            best_move = analysis["pv"][0].uci()
-            print(f"Engine's best move: {best_move}")
-
-
 if __name__ == "__main__":
-    try:
-        model, tokenizer, train_dataset = prepare_data_and_model()
-        model = train_model(model, tokenizer, train_dataset)
-        test_model(model, tokenizer)
-        print("Training completed successfully!")
-    except Exception as e:
-        print(f"Error during training: {e}")
-    finally:
-        # Clean up the chess engine
-        if engine:
-            engine.quit()
+    model, tokenizer, train_dataset = prepare_data_and_model()
+    model = train_model(model, tokenizer, train_dataset)
+    engine.quit()
