@@ -209,38 +209,54 @@ def move_correctness_reward(prompts, completions, board_state, **kwargs) -> List
 
     rewards = []
 
-    for move, board in zip(extracted_moves, board_state):
+    for i, move in enumerate(extracted_moves):
         # Clean up the move string (remove extra spaces, etc.)
         move = move.strip()
-
-        # Evaluate the move (returns 0.0-1.0)
-        reward = evaluate_move(board, move)
-
+        
+        # Get the boards for this completion
+        boards = board_state[i] if isinstance(board_state[i], list) else [board_state[i]]
+        
+        # Evaluate the move on all boards and take the average
+        board_rewards = []
+        for board in boards:
+            board_reward = evaluate_move(board, move)
+            board_rewards.append(board_reward)
+        
+        # Average the rewards across all boards
+        if board_rewards:
+            avg_reward = sum(board_rewards) / len(board_rewards)
+        else:
+            avg_reward = 0.0
+        
         # Apply weight of 0.7 to emphasize move quality in overall reward
-        weighted_reward = 0.7 * reward
+        weighted_reward = 0.7 * avg_reward
         rewards.append(weighted_reward)
 
         # Simple quality label based on reward
         quality = "illegal move"
-        if reward == 1.0:
+        if avg_reward == 1.0:
             quality = "best move"
-        elif reward >= 0.7:
+        elif avg_reward >= 0.7:
             quality = "good move"
-        elif reward >= 0.3:
+        elif avg_reward >= 0.3:
             quality = "okay move"
-        elif reward > 0.0:
+        elif avg_reward > 0.0:
             quality = "weak move"
 
-        wandb.log({"move_reward": reward, "move_quality": quality})
+        wandb.log({"move_reward": avg_reward, "move_quality": quality})
 
     if len(rewards) > 0:
         sample_idx = random.randint(0, len(rewards) - 1)
-        # Extract FEN from the board directly instead of from prompts
-        fen = board_state[sample_idx].fen()
+        # Get a sample board for logging
+        if isinstance(board_state[sample_idx], list):
+            board = board_state[sample_idx][0]  # Show first board for this example
+        else:
+            board = board_state[sample_idx]
+            
+        fen = board.fen()
         move = extracted_moves[sample_idx]
         reward = rewards[sample_idx]
 
-        board = board_state[sample_idx]
         analysis = engine.analyse(board, chess.engine.Limit(time=0.1))
         best_move = analysis["pv"][0].uci()
         print(f"\nPosition: {fen}")
@@ -265,11 +281,24 @@ def legal_move_reward(completions, board_state, **kwargs) -> List[float]:
     extracted_moves = [extract_xml_answer(r) for r in responses]
 
     rewards = []
-    for move, board in zip(extracted_moves, board_state):
+    for i, move in enumerate(extracted_moves):
         move = move.strip()
-        legal = is_valid_move(move, board)
-        wandb.log({"legal_move": 1 if legal else 0})
-        rewards.append(0.3 if legal else 0.0)
+        
+        # Get the boards for this completion
+        boards = board_state[i] if isinstance(board_state[i], list) else [board_state[i]]
+        
+        # Check if the move is legal on all boards
+        legal_count = 0
+        for board in boards:
+            if is_valid_move(move, board):
+                legal_count += 1
+        
+        # Calculate the legality ratio
+        legal_ratio = legal_count / len(boards) if boards else 0
+        
+        # Log and reward - full reward if legal on all boards, partial if on some
+        wandb.log({"legal_move_ratio": legal_ratio})
+        rewards.append(0.3 * legal_ratio)
 
     return rewards
 
