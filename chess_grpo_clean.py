@@ -190,7 +190,7 @@ def evaluate_move(board: chess.Board, move_str: str, time_limit: float = 0.1) ->
         return 0.0
 
 # Reward functions for GRPO
-def move_correctness_reward(prompts, completions, board_state, **kwargs) -> List[float]:
+def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[float]:
     """
     Reward based on how good the suggested move is according to the engine.
     Uses position evaluation difference before and after the move.
@@ -203,8 +203,8 @@ def move_correctness_reward(prompts, completions, board_state, **kwargs) -> List
         # Clean up the move string
         move = move.strip()
         
-        # Get the board for this completion
-        board = board_state[i]
+        # Convert FEN string to board object
+        board = chess.Board(board_fen[i])
         
         # Evaluate the move
         reward = evaluate_move(board, move)
@@ -229,12 +229,13 @@ def move_correctness_reward(prompts, completions, board_state, **kwargs) -> List
     # Log a sample for debugging
     if len(rewards) > 0:
         sample_idx = random.randint(0, len(rewards) - 1)
-        fen = board_state[sample_idx].fen()
+        board = chess.Board(board_fen[sample_idx])
+        fen = board.fen()
         move = extracted_moves[sample_idx]
         reward = rewards[sample_idx]
         
         # Get engine's best move
-        analysis = engine.analyse(board_state[sample_idx], chess.engine.Limit(time=0.1))
+        analysis = engine.analyse(board, chess.engine.Limit(time=0.1))
         best_move = analysis["pv"][0].uci()
         
         print(f"\nPosition: {fen}")
@@ -243,7 +244,7 @@ def move_correctness_reward(prompts, completions, board_state, **kwargs) -> List
 
     return rewards
 
-def legal_move_reward(completions, board_state, **kwargs) -> List[float]:
+def legal_move_reward(completions, board_fen, **kwargs) -> List[float]:
     """Reward function that checks if the move is legal (weight: 0.3)"""
     responses = [completion[0]["content"] for completion in completions]
     extracted_moves = [extract_answer(r) for r in responses]
@@ -251,7 +252,9 @@ def legal_move_reward(completions, board_state, **kwargs) -> List[float]:
     rewards = []
     for i, move in enumerate(extracted_moves):
         move = move.strip()
-        legal = is_valid_move(move, board_state[i])
+        # Convert FEN string to board object
+        board = chess.Board(board_fen[i])
+        legal = is_valid_move(move, board)
         wandb.log({"legal_move": 1 if legal else 0})
         rewards.append(0.3 if legal else 0.0)
 
@@ -290,9 +293,7 @@ def prepare_data_and_model():
 
     def format_dataset(example):
         """Format dataset for GRPO training"""
-        # Convert the chess board for use in the reward function
-        board = chess.Board(example["fen"])
-        
+        # Store the FEN string instead of the Board object
         return {
             "prompt": [
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -301,7 +302,7 @@ def prepare_data_and_model():
                     "content": f"Analyze this chess position and give the best move: {example['fen']}",
                 },
             ],
-            "board_state": board,
+            "board_fen": example["fen"],
         }
 
     train_dataset = dataset.map(format_dataset)
