@@ -127,14 +127,14 @@ def prepare_chess_dataset(num_samples: int = 1000) -> Dataset:
             break
         try:
             fen, _ = get_random_position(row)
-            positions.append({"fen": fen})
+            positions.append(fen)
             count += 1
             if count % 100 == 0:
                 print(f"Processed {count} positions...")
         except Exception as e:
             print(f"Error in game {count}: {e}")
 
-    return Dataset.from_dict({"fen": [p["fen"] for p in positions]})
+    return Dataset.from_dict({"fen": positions})
 
 def is_valid_move(move_str: str, board: chess.Board) -> bool:
     """Check if a move string is valid for the given board position"""
