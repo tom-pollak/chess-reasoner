@@ -23,13 +23,45 @@ import torch
 import wandb
 from datasets import Dataset, load_dataset
 
+# ======== CONFIGURATION PARAMETERS ========
+# Model settings
+MODEL = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
+MAX_SEQ_LENGTH = 1024
+LORA_RANK = 64
+GPU_MEMORY_UTILIZATION = 0.9
+
+# Dataset settings
+NUM_SAMPLES = 1000
+
+# Training settings
+LEARNING_RATE = 5e-6
+WEIGHT_DECAY = 0.1
+WARMUP_RATIO = 0.1
+BATCH_SIZE = 1
+GRADIENT_ACCUMULATION_STEPS = 8
+NUM_GENERATIONS = 4
+MAX_STEPS = 500
+SAVE_STEPS = 100
+
+# Generation length settings
+MAX_PROMPT_LENGTH = 256
+MAX_COMPLETION_LENGTH = 384  # Increased to ensure model has enough tokens to finish
+
+# Reward function weights
+MOVE_QUALITY_WEIGHT = 0.7  # Weight for move correctness reward
+LEGAL_MOVE_WEIGHT = 0.3    # Weight for legal move reward
+FORMAT_REWARD_WEIGHT = 0.3 # Weight for format correctness
+
+# Engine settings
+ENGINE_ANALYSIS_TIME = 0.1  # Time limit for engine analysis in seconds
+# =========================================
+
 # Initialize Unsloth and GRPO
 from unsloth import FastLanguageModel, PatchFastRL
 PatchFastRL("GRPO", FastLanguageModel)
 from unsloth import is_bfloat16_supported
 
 # Initialize wandb
-MODEL = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
 wandb.init(project="chess-reasoner", name=f"{MODEL.split('/')[-1]}-chess-grpo")
 
 # Initialize chess engine
@@ -46,21 +78,19 @@ print("Chess engine initialized successfully!")
 
 # System prompt and XML format
 SYSTEM_PROMPT = """
-You are a chess expert. Given a chess position in FEN notation, you will analyze the position and suggest the best move.
+You are a chess expert. Given a chess position in FEN notation, analyze it and suggest the best move.
 
-In your analysis:
-1. Assess the position's key features (material, pawn structure, king safety)
-2. Identify tactical opportunities (forks, pins, discovered attacks)
-3. Consider strategic plans based on the position
-4. Calculate concrete variations when needed
-5. Compare candidate moves and evaluate their strengths and weaknesses
-
-Respond in the following format:
+Your response MUST be in this exact format:
 <think>
-[Your step-by-step analysis of the position, considering tactics, strategy, and possible continuations]
+Keep your analysis VERY brief (50 words or less). Focus only on:
+- Material balance
+- Any immediate tactics
+- Why your chosen move is best
 </think>
 
-[Your chosen move in algebraic notation, e.g., e2e4, g8f6, etc.]
+e2e4
+
+After the </think> tag, provide ONLY the UCI notation of your move (e.g., e2e4) with nothing else.
 """
 
 XML_FORMAT = """\
@@ -74,14 +104,13 @@ XML_FORMAT = """\
 # Utility functions
 def extract_answer(text: str) -> str:
     """Extract the answer (move) which comes after the </think> tag"""
-    if "</think>" not in text:
-        return ""
     try:
-        # Get the text after the closing </think> tag and remove all whitespace
-        answer = text.split("</think>")[-1].strip()
-        # Remove all newlines and extra whitespace
-        answer = "".join(answer.split())
-        return answer
+        parts = text.split("</think>")
+        if len(parts) == 1:
+            return ""
+        else:
+            # Remove all newlines and spaces in the last part
+            return "".join(parts[-1].split())
     except Exception as e:
         print(f"Error extracting answer: {e}")
         return ""
@@ -115,7 +144,7 @@ def get_random_position(row) -> Tuple[str, chess.Board]:
         print(f"Error processing game: {e}")
         return chess.STARTING_FEN, chess.Board()
 
-def prepare_chess_dataset(num_samples: int = 1000) -> Dataset:
+def prepare_chess_dataset() -> Dataset:
     """Create a dataset of chess positions from games"""
     dataset = load_dataset("Icannos/lichess_games", streaming=True)
     positions = []
@@ -123,7 +152,7 @@ def prepare_chess_dataset(num_samples: int = 1000) -> Dataset:
     # Get random positions from games
     count = 0
     for row in dataset["train"]:
-        if count >= num_samples:
+        if count >= NUM_SAMPLES:
             break
         try:
             fen, _ = get_random_position(row)
@@ -144,7 +173,7 @@ def is_valid_move(move_str: str, board: chess.Board) -> bool:
     except:
         return False
 
-def evaluate_move(board: chess.Board, move_str: str, time_limit: float = 0.1) -> float:
+def evaluate_move(board: chess.Board, move_str: str) -> float:
     """
     Evaluate a chess move using Stockfish engine by comparing position evaluation
     before and after the move. Returns a score between 0 and 1.
@@ -155,19 +184,19 @@ def evaluate_move(board: chess.Board, move_str: str, time_limit: float = 0.1) ->
             return 0.0
 
         # Get the initial position evaluation
-        initial_result = engine.analyse(board, chess.engine.Limit(time=time_limit))
+        initial_result = engine.analyse(board, chess.engine.Limit(time=ENGINE_ANALYSIS_TIME))
         best_move = initial_result["pv"][0]
 
         # Create a copy of the board and apply the best move
         best_board = board.copy()
         best_board.push(best_move)
-        best_eval = engine.analyse(best_board, chess.engine.Limit(time=time_limit))
+        best_eval = engine.analyse(best_board, chess.engine.Limit(time=ENGINE_ANALYSIS_TIME))
         best_score = best_eval["score"].relative.score(mate_score=10000)
 
         # Now evaluate the player's move
         player_board = board.copy()
         player_board.push(move)
-        player_eval = engine.analyse(player_board, chess.engine.Limit(time=time_limit))
+        player_eval = engine.analyse(player_board, chess.engine.Limit(time=ENGINE_ANALYSIS_TIME))
         player_score = player_eval["score"].relative.score(mate_score=10000)
 
         # Calculate evaluation difference (negative means worse than best move)
@@ -214,8 +243,8 @@ def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[f
         # Evaluate the move
         reward = evaluate_move(board, move)
         
-        # Apply weight of 0.7 to emphasize move quality
-        weighted_reward = 0.7 * reward
+        # Apply weight from configuration
+        weighted_reward = MOVE_QUALITY_WEIGHT * reward
         rewards.append(weighted_reward)
 
         # Log quality
@@ -240,7 +269,7 @@ def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[f
         reward = rewards[sample_idx]
         
         # Get engine's best move
-        analysis = engine.analyse(board, chess.engine.Limit(time=0.1))
+        analysis = engine.analyse(board, chess.engine.Limit(time=ENGINE_ANALYSIS_TIME))
         best_move = analysis["pv"][0].uci()
         
         print(f"\nPosition: {fen}")
@@ -250,7 +279,7 @@ def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[f
     return rewards
 
 def legal_move_reward(completions, board_fen, **kwargs) -> List[float]:
-    """Reward function that checks if the move is legal (weight: 0.3)"""
+    """Reward function that checks if the move is legal"""
     responses = [completion[0]["content"] for completion in completions]
     extracted_moves = [extract_answer(r) for r in responses]
 
@@ -270,7 +299,7 @@ def legal_move_reward(completions, board_fen, **kwargs) -> List[float]:
         print(f"Is legal: {legal}")
         
         wandb.log({"legal_move": 1 if legal else 0})
-        rewards.append(0.3 if legal else 0.0)
+        rewards.append(LEGAL_MOVE_WEIGHT if legal else 0.0)
 
     return rewards
 
@@ -279,9 +308,16 @@ def soft_format_reward_func(completions, **kwargs) -> List[float]:
     pattern = r"<think>.*?</think>\s*\S+"  # <think> tags followed by non-whitespace (the move)
     responses = [completion[0]["content"] for completion in completions]
     matches = [re.search(pattern, r, re.DOTALL) is not None for r in responses]
+    
+    # Print debugging info for format checking
+    for i, (response, match) in enumerate(zip(responses, matches)):
+        print(f"\n----- FORMAT CHECK [{i}] -----")
+        print(f"Response preview: {response[:100]}...")
+        print(f"Has correct format: {match}")
+    
     for match in matches:
         wandb.log({"format_correct": 1 if match else 0})
-    return [0.3 if match else 0.0 for match in matches]
+    return [FORMAT_REWARD_WEIGHT if match else 0.0 for match in matches]
 
 def count_xml(text) -> float:
     """Count XML tags for partial reward"""
@@ -303,7 +339,7 @@ def xmlcount_reward_func(completions, **kwargs) -> List[float]:
 # Main function to prepare dataset and model
 def prepare_data_and_model():
     print("Preparing dataset...")
-    dataset = prepare_chess_dataset(num_samples=1000)
+    dataset = prepare_chess_dataset()
 
     def format_dataset(example):
         """Format dataset for GRPO training"""
@@ -323,27 +359,23 @@ def prepare_data_and_model():
     print("Dataset prepared successfully!")
 
     print("Setting up model...")
-    # Model parameters
-    max_seq_length = 1024
-    lora_rank = 64
-
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=MODEL,
-        max_seq_length=max_seq_length,
+        max_seq_length=MAX_SEQ_LENGTH,
         load_in_4bit=True,
         fast_inference=True,
-        max_lora_rank=lora_rank,
-        gpu_memory_utilization=0.9,  # Increased for the larger model
+        max_lora_rank=LORA_RANK,
+        gpu_memory_utilization=GPU_MEMORY_UTILIZATION,
     )
 
     model = FastLanguageModel.get_peft_model(
         model,
-        r=lora_rank,
+        r=LORA_RANK,
         target_modules=[
             "q_proj", "k_proj", "v_proj", "o_proj",
             "gate_proj", "up_proj", "down_proj",
         ],
-        lora_alpha=lora_rank,
+        lora_alpha=LORA_RANK,
         use_gradient_checkpointing="unsloth",
         random_state=3407,
     )
@@ -356,28 +388,28 @@ def train_model(model, tokenizer, train_dataset):
 
     training_args = GRPOConfig(
         use_vllm=True,
-        learning_rate=5e-6,
+        learning_rate=LEARNING_RATE,
         adam_beta1=0.9,
         adam_beta2=0.99,
-        weight_decay=0.1,
-        warmup_ratio=0.1,
+        weight_decay=WEIGHT_DECAY,
+        warmup_ratio=WARMUP_RATIO,
         lr_scheduler_type="cosine",
         optim="adamw_8bit",
         logging_steps=1,
         bf16=is_bfloat16_supported(),
         fp16=not is_bfloat16_supported(),
-        per_device_train_batch_size=1,  # Reduced for the larger model
-        gradient_accumulation_steps=8,  # Increased for the larger model
-        num_generations=4,  # Reduced for the larger model
-        max_prompt_length=256,
-        max_completion_length=256,
-        max_steps=500,
-        save_steps=100,
+        per_device_train_batch_size=BATCH_SIZE,
+        gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
+        num_generations=NUM_GENERATIONS,
+        max_prompt_length=MAX_PROMPT_LENGTH,
+        max_completion_length=MAX_COMPLETION_LENGTH,
+        max_steps=MAX_STEPS,
+        save_steps=SAVE_STEPS,
         save_total_limit=3,
         max_grad_norm=0.1,
         report_to="wandb",
         output_dir="outputs",
-        run_name="chess-reasoner-training",  # Added explicit run name
+        run_name="chess-reasoner-training",
     )
 
     trainer = GRPOTrainer(
@@ -435,9 +467,9 @@ def test_model(model, tokenizer):
             # Generation parameters
             from vllm import SamplingParams
             sampling_params = SamplingParams(
-                temperature=0.7,
+                temperature=0.5,  # Lower temperature for more deterministic outputs
                 top_p=0.95,
-                max_tokens=1024,
+                max_tokens=MAX_COMPLETION_LENGTH,  # Match the training completion length
             )
 
             # Generate without LoRA
@@ -504,7 +536,7 @@ def test_model(model, tokenizer):
 
                 # Get top engine move for comparison
                 if engine is not None:
-                    analysis = engine.analyse(board, chess.engine.Limit(time=0.2))
+                    analysis = engine.analyse(board, chess.engine.Limit(time=ENGINE_ANALYSIS_TIME))
                     best_move = analysis["pv"][0].uci()
                     print(f"Engine's best move: {best_move}")
 
