@@ -340,7 +340,10 @@ def prepare_data_and_model():
     def new_getitem(idx):
         item = original_getitem(idx)
         # Convert FEN to board only when needed
-        item["board_state"] = chess.Board(item["board_fen"])
+        if isinstance(item["board_fen"], list):
+            item["board_state"] = [chess.Board(fen) for fen in item["board_fen"]]
+        else:
+            item["board_state"] = chess.Board(item["board_fen"])
         return item
 
     train_dataset.__getitem__ = new_getitem
