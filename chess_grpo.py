@@ -334,6 +334,7 @@ def legal_move_reward(completions, board_fen, **kwargs) -> List[float]:
 
     return rewards
 
+
 def valid_uci_reward(completions, board_fen, **kwargs) -> List[float]:
     """Reward function that checks if the move is a valid UCI format"""
     responses = [completion[0]["content"] for completion in completions]
@@ -498,7 +499,21 @@ def train_model(model, tokenizer, train_dataset):
 
     return model
 
+
+def push_to_hub(model, tokenizer, repo_id):
+    """Upload the trained model to Hugging Face Hub"""
+    print(f"Uploading model to Hugging Face Hub: {repo_id}")
+    model.push_to_hub(repo_id)
+    tokenizer.push_to_hub(repo_id)
+    print(f"Successfully uploaded model to: https://huggingface.co/{repo_id}")
+
+
 if __name__ == "__main__":
+    from huggingface_hub import login
+
+    login()
+
     model, tokenizer, train_dataset = prepare_data_and_model()
     model = train_model(model, tokenizer, train_dataset)
+    push_to_hub(model, tokenizer, "your-username/chess-reasoner")
     engine.quit()
