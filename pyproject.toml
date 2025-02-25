@@ -6,16 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "chess>=1.11.1",
-    #"datasets>=3.3.2",
-    #"msgspec>=0.19.0",
-    #"peft>=0.14.0",
-    #"python-chess>=1.999",
-    #"torch>=2.6.0",
-    #"transformers>=4.49.0",
-    #"trl>=0.15.1",
-    "unsloth>=2025.2.15",
-    "vllm>=0.2.5",
-    #"wandb>=0.18.7",
-    #"zstandard>=0.23.0",
+    "msgspec>=0.19.0",
     "wandb>=0.18.7",
+    "zstandard>=0.23.0",
 ]
