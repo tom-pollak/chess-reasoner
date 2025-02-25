@@ -39,6 +39,7 @@ logging.basicConfig(
 format_results = []
 xml_structure_scores = []
 legal_checks = []
+valid_uci_checks = []
 
 # ======== CONFIGURATION PARAMETERS ========
 # Model settings
@@ -66,9 +67,10 @@ MAX_PROMPT_LENGTH = 256
 MAX_COMPLETION_LENGTH = 512
 
 # Reward function weights
-MOVE_QUALITY_WEIGHT = 0.7  # Weight for move correctness reward
-LEGAL_MOVE_WEIGHT = 0.3  # Weight for legal move reward
-FORMAT_REWARD_WEIGHT = 0.3  # Weight for format correctness
+FORMAT_REWARD_WEIGHT = 0.1  # Basic XML format (easiest)
+UCI_FORMAT_WEIGHT = 0.2    # Valid UCI notation
+LEGAL_MOVE_WEIGHT = 0.4    # Legal move (harder)
+MOVE_QUALITY_WEIGHT = 0.7  # Good move quality (hardest)
 
 # Engine settings
 ENGINE_ANALYSIS_TIME = 0.1  # Time limit for engine analysis in seconds
@@ -181,6 +183,15 @@ def prepare_chess_dataset() -> Dataset:
     return Dataset.from_dict({"fen": positions})
 
 
+def is_valid_uci_format(move_str: str) -> bool:
+    """Check if a string is in valid UCI move format (e.g., e2e4)"""
+    try:
+        chess.Move.from_uci(move_str)
+        return True
+    except:
+        return False
+
+
 def is_valid_move(move_str: str, board: chess.Board) -> bool:
     """Check if a move string is valid for the given board position"""
     try:
@@ -245,7 +256,7 @@ def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[f
     Reward based on how good the suggested move is according to the engine.
     Uses position evaluation difference before and after the move.
     """
-    global format_results, xml_structure_scores, legal_checks
+    global format_results, xml_structure_scores, legal_checks, valid_uci_checks
 
     responses = [completion[0]["content"] for completion in completions]
     extracted_moves = [extract_answer(r) for r in responses]
@@ -267,11 +278,12 @@ def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[f
         format_symbol = "✓" if i < len(format_results) and format_results[i] else "✗"
         xml_score = xml_structure_scores[i] if i < len(xml_structure_scores) else 0.0
         legal = legal_checks[i] if i < len(legal_checks) else False
+        valid_uci = valid_uci_checks[i] if i < len(valid_uci_checks) else False
         move = extracted_moves[i]
         quality = move_quality_scores[i]
 
         print(
-            f"Gen {i}: Move: {move or '-'} | Format: {format_symbol} | XML: {xml_score:.2f} | Legal: {legal} | Quality: {quality:.2f}"
+            f"Gen {i}: Move: {move or '-'} | Format: {format_symbol} | XML: {xml_score:.2f} | Valid UCI: {valid_uci} | Legal: {legal} | Quality: {quality:.2f}"
         )
 
         logging.info(f"\n==== GENERATION {i} COMPLETE SUMMARY ====")
@@ -281,6 +293,7 @@ def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[f
             f"FORMAT CORRECT: {format_results[i] if i < len(format_results) else False}"
         )
         logging.info(f"XML STRUCTURE SCORE: {xml_score:.2f}")
+        logging.info(f"VALID UCI FORMAT: {valid_uci}")
         logging.info(f"MOVE LEGAL: {legal}")
         logging.info(f"MOVE QUALITY: {quality:.2f}")
 
@@ -301,6 +314,8 @@ def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[f
             / max(1, len(xml_structure_scores)),
             "format_correct_pct": sum(1 for f in format_results if f)
             / max(1, len(format_results)),
+            "valid_uci_pct": sum(1 for u in valid_uci_checks if u)
+            / max(1, len(valid_uci_checks)),
             "legal_moves_pct": sum(1 for l in legal_checks if l)
             / max(1, len(legal_checks)),
         }
@@ -310,23 +325,43 @@ def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[f
 
 
 def legal_move_reward(completions, board_fen, **kwargs) -> List[float]:
-    """Reward function that checks if the move is legal"""
+    """Reward function that checks if the move is legal and/or valid UCI format"""
     responses = [completion[0]["content"] for completion in completions]
     extracted_moves = [extract_answer(r) for r in responses]
 
     rewards = []
     legality_results = []
+    valid_uci_results = []
 
     for i, move in enumerate(extracted_moves):
         move = move.strip()
         board = chess.Board(board_fen[i])
+        
+        # Check if move is valid UCI format
+        valid_uci = is_valid_uci_format(move)
+        valid_uci_results.append(valid_uci)
+        
+        # Check if move is legal in this position
         legal = is_valid_move(move, board)
         legality_results.append(legal)
+        
+        # Log metrics
         wandb.log({"legal_move": 1 if legal else 0})
-        rewards.append(LEGAL_MOVE_WEIGHT if legal else 0.0)
+        wandb.log({"valid_uci_format": 1 if valid_uci else 0})
+        
+        # Give full reward for legal moves, partial reward for valid UCI format
+        if legal:
+            reward = LEGAL_MOVE_WEIGHT
+        elif valid_uci:
+            reward = UCI_FORMAT_WEIGHT
+        else:
+            reward = 0.0
+            
+        rewards.append(reward)
 
-    global legal_checks
+    global legal_checks, valid_uci_checks
     legal_checks = legality_results
+    valid_uci_checks = valid_uci_results
 
     return rewards
 
