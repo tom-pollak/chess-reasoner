@@ -311,7 +311,7 @@ def soft_format_reward_func(completions, **kwargs) -> List[float]:
     """Reward function that checks if the completion has the correct format"""
     pattern = r"<reasoning>.*?</reasoning>\s*<answer>.*?</answer>"
     responses = [completion[0]["content"] for completion in completions]
-    matches = [re.search(pattern, r, re.DOTALL) is not None for r in responses]
+    matches = [re.match(pattern, r, re.DOTALL) is not None for r in responses]
     # Log format success
     for i, match in enumerate(matches):
         wandb.log({"format_correct": 1 if match else 0})
@@ -320,9 +320,9 @@ def soft_format_reward_func(completions, **kwargs) -> List[float]:
 
 def strict_format_reward_func(completions, **kwargs) -> List[float]:
     """Reward function that checks if the completion has a more precise format with newlines"""
-    pattern = r"<reasoning>\n.*?\n</reasoning>\n<answer>\n.*?\n</answer>"
+    pattern = r"^<reasoning>\n.*?\n</reasoning>\n<answer>\n.*?\n</answer>\n$"
     responses = [completion[0]["content"] for completion in completions]
-    matches = [re.search(pattern, r, re.DOTALL) is not None for r in responses]
+    matches = [re.match(pattern, r, re.DOTALL) is not None for r in responses]
     # Log strict format success
     for i, match in enumerate(matches):
         wandb.log({"strict_format_correct": 1 if match else 0})
