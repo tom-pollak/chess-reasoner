@@ -334,7 +334,7 @@ def legal_move_reward(completions, board_fen, **kwargs) -> List[float]:
 
     return rewards
 
-def valid_uci_reward() -> List[float]:
+def valid_uci_reward(completions, board_fen, **kwargs) -> List[float]:
     """Reward function that checks if the move is a valid UCI format"""
     responses = [completion[0]["content"] for completion in completions]
     extracted_moves = [extract_answer(r) for r in responses]
