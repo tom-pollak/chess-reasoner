@@ -25,52 +25,27 @@ from datasets import Dataset, load_dataset
 
 MODEL = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 
-# Initialize wandb
 wandb.init(project="chess-reasoner", name=f"{MODEL.split('/')[-1]}-chess-grpo")
 
-# Setup Unsloth with GRPO
 from unsloth import FastLanguageModel, PatchFastRL
 
 PatchFastRL("GRPO", FastLanguageModel)
 
-# Check if we have a GPU with bfloat16 support
 from unsloth import is_bfloat16_supported
 
 
-# Setup Stockfish engine (install stockfish first!)
-# For macOS: brew install stockfish
-# For Ubuntu: apt-get install stockfish
 def setup_engine() -> chess.engine.SimpleEngine:
     try:
-        # Try to find stockfish in PATH
-        engine = chess.engine.SimpleEngine.popen_uci("stockfish")
-        return engine
+        return chess.engine.SimpleEngine.popen_uci("stockfish")
     except FileNotFoundError:
-        # Try common paths if not in PATH
-        common_paths = [
-            "/usr/local/bin/stockfish",
-            "/usr/bin/stockfish",
-            "/opt/homebrew/bin/stockfish",
-        ]
-        for path in common_paths:
-            if os.path.exists(path):
-                return chess.engine.SimpleEngine.popen_uci(path)
-
         raise FileNotFoundError(
             "Stockfish not found. Please install stockfish and make sure it's in your PATH."
         )
 
 
-# Initialize chess engine
-try:
-    engine = setup_engine()
-    print("Chess engine initialized successfully!")
-except Exception as e:
-    print(f"Warning: Could not initialize chess engine: {e}")
-    print("Training will continue, but move evaluation will be random.")
-    engine = None
+engine = setup_engine()
+print("Chess engine initialized successfully!")
 
-# Constants and system prompt
 SYSTEM_PROMPT = """
 You are a chess expert. Given a chess position in FEN notation, you will analyze the position and suggest the best move.
 
@@ -100,7 +75,6 @@ XML_FORMAT = """\
 """
 
 
-# Extract answers from model responses
 def extract_xml_answer(text: str) -> str:
     if "<answer>" not in text or "</answer>" not in text:
         return ""
@@ -113,7 +87,6 @@ def extract_xml_answer(text: str) -> str:
         return ""
 
 
-# Function to get random positions from chess games
 def get_random_position(row) -> Tuple[str, chess.Board]:
     try:
         pgn = io.StringIO(row["text"])
@@ -144,7 +117,6 @@ def get_random_position(row) -> Tuple[str, chess.Board]:
         return chess.STARTING_FEN, chess.Board()
 
 
-# Prepare the Lichess dataset with random positions
 def prepare_chess_dataset(num_samples: int = 1000) -> Dataset:
     dataset = load_dataset("Icannos/lichess_games", streaming=True)
 
@@ -172,21 +144,13 @@ def prepare_chess_dataset(num_samples: int = 1000) -> Dataset:
     return Dataset.from_dict(data_dict)
 
 
-# Function to evaluate a chess move using the engine
 def evaluate_move(board: chess.Board, move_str: str, time_limit: float = 0.1) -> float:
     """
     Evaluate a chess move using Stockfish engine by comparing position evaluation
     before and after the move. Returns a score between 0 and 1.
     """
-    if engine is None:
-        # If no engine, return random score as fallback
-        return random.random()
-
     try:
-        # Parse the move string (e.g., "e2e4")
         move = chess.Move.from_uci(move_str)
-
-        # Check if move is legal
         if move not in board.legal_moves:
             return 0.0
 
@@ -259,27 +223,21 @@ def move_correctness_reward(prompts, completions, board_state, **kwargs) -> List
         elif reward > 0.0:
             quality = "weak move"
 
-        # Log to wandb
         wandb.log({"move_reward": reward, "move_quality": quality})
 
-    # Log one sample for debugging
     if len(rewards) > 0:
         sample_idx = random.randint(0, len(rewards) - 1)
-        fen = prompts[sample_idx][-1]["content"]
+        # Extract FEN from the board directly instead of from prompts
+        fen = board_state[sample_idx].fen()
         move = extracted_moves[sample_idx]
         reward = rewards[sample_idx]
 
-        # Get best move for comparison
         board = board_state[sample_idx]
-        try:
-            if engine is not None:
-                analysis = engine.analyse(board, chess.engine.Limit(time=0.1))
-                best_move = analysis["pv"][0].uci()
-                print(f"\nPosition: {fen}")
-                print(f"Move: {move}, Reward: {reward:.2f}")
-                print(f"Engine's best move: {best_move}")
-        except Exception as e:
-            print(f"Error in logging: {e}")
+        analysis = engine.analyse(board, chess.engine.Limit(time=0.1))
+        best_move = analysis["pv"][0].uci()
+        print(f"\nPosition: {fen}")
+        print(f"Move: {move}, Reward: {reward:.2f}")
+        print(f"Engine's best move: {best_move}")
 
     return rewards
 
@@ -302,7 +260,6 @@ def legal_move_reward(completions, board_state, **kwargs) -> List[float]:
     for move, board in zip(extracted_moves, board_state):
         move = move.strip()
         legal = is_valid_move(move, board)
-        # Log to wandb
         wandb.log({"legal_move": 1 if legal else 0})
         rewards.append(0.3 if legal else 0.0)
 
@@ -314,7 +271,6 @@ def soft_format_reward_func(completions, **kwargs) -> List[float]:
     pattern = r"<reasoning>.*?</reasoning>\s*<answer>.*?</answer>"
     responses = [completion[0]["content"] for completion in completions]
     matches = [re.match(pattern, r, re.DOTALL) is not None for r in responses]
-    # Log format success
     for i, match in enumerate(matches):
         wandb.log({"format_correct": 1 if match else 0})
     return [0.3 if match else 0.0 for match in matches]
@@ -325,7 +281,6 @@ def strict_format_reward_func(completions, **kwargs) -> List[float]:
     pattern = r"^<reasoning>\n.*?\n</reasoning>\n<answer>\n.*?\n</answer>\n$"
     responses = [completion[0]["content"] for completion in completions]
     matches = [re.match(pattern, r, re.DOTALL) is not None for r in responses]
-    # Log strict format success
     for i, match in enumerate(matches):
         wandb.log({"strict_format_correct": 1 if match else 0})
     return [0.2 if match else 0.0 for match in matches]
@@ -354,10 +309,8 @@ def xmlcount_reward_func(completions, **kwargs) -> List[float]:
 # Main function to prepare dataset and model
 def prepare_data_and_model():
     print("Preparing dataset...")
-    # Increase sample size for better training
     dataset = prepare_chess_dataset(num_samples=1000)
 
-    # Prepare the dataset for training with prompts
     def format_dataset(example):
         return {
             "prompt": [
@@ -385,11 +338,11 @@ def prepare_data_and_model():
     train_dataset.__getitem__ = new_getitem
 
     print("Setting up model...")
+
     # Model parameters
     max_seq_length = 1024
     lora_rank = 64
 
-    # Load the Qwen 2.5 3B model with LoRA
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=MODEL,
         max_seq_length=max_seq_length,
