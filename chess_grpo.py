@@ -231,8 +231,8 @@ def log_generation_results(
             f"XML: {symbol_fmt(xml_score == XML_COUNT_REWARD_WEIGHT)} | "
             f"Valid UCI: {symbol_fmt(valid_uci)} | "
             f"Legal: {symbol_fmt(legal)} | "
-            f"Quality: {quality:.2f} |",
-            f"Engine Time: {engine_time:.2f}s",
+            f"Quality: {quality:.2f} |"
+            f"Engine Time: {engine_time:.2f}s"
         )
 
         # Log detailed information to the log file
