@@ -55,10 +55,14 @@ best_moves = []
 # fmt: off
 # Model settings
 MODEL = "Qwen/Qwen2.5-14B-Instruct"
-MAX_SEQ_LENGTH = 1024
 LORA_RANK = 128
 GPU_MEMORY_UTILIZATION = 0.95
 CHECKPOINT_PATH = None  # No checkpoint: None
+
+# Generation length settings
+MAX_SEQ_LENGTH = 4096
+MAX_PROMPT_LENGTH = 256
+MAX_COMPLETION_LENGTH = MAX_SEQ_LENGTH - MAX_PROMPT_LENGTH
 
 # Dataset settings
 NUM_SAMPLES = 10_000
@@ -69,13 +73,9 @@ WEIGHT_DECAY = 0.1
 WARMUP_RATIO = 0.1
 BATCH_SIZE = 1
 GRADIENT_ACCUMULATION_STEPS = 1
-NUM_GENERATIONS = 4
+NUM_GENERATIONS = 6
 MAX_STEPS = 10_000
 SAVE_STEPS = 1000
-
-# Generation length settings
-MAX_PROMPT_LENGTH = 256
-MAX_COMPLETION_LENGTH = 768
 
 # Reward function weights
 XML_COUNT_REWARD_WEIGHT = 0.05   # Has think tags
