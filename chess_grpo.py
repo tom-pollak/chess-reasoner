@@ -378,12 +378,12 @@ def get_random_position(row) -> tuple[str, chess.Board]:
     pgn = io.StringIO(row["text"])
     game = chess.pgn.read_game(pgn)
     if not game:
-        return chess.STARTING_FEN, chess.Board()
+        return chess.STARTING_FEN
 
     board = game.board()
     mainline_moves = list(game.mainline_moves())
     if not mainline_moves:
-        return chess.STARTING_FEN, board
+        return chess.STARTING_FEN
 
     # Choose a random point in the game (not too early, not too late)
     min_move = min(5, len(mainline_moves) // 5)
