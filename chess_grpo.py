@@ -125,61 +125,6 @@ def extract_answer(text: str) -> str:
     return "".join(parts[-1].split())
 
 
-def get_random_position(row) -> Tuple[str, chess.Board]:
-    """Extract a random position from a chess game"""
-    pgn = io.StringIO(row["text"])
-    game = chess.pgn.read_game(pgn)
-    if not game:
-        return chess.STARTING_FEN, chess.Board()
-
-    board = game.board()
-    mainline_moves = list(game.mainline_moves())
-    if not mainline_moves:
-        return chess.STARTING_FEN, board
-
-    # Choose a random point in the game (not too early, not too late)
-    min_move = min(5, len(mainline_moves) // 5)
-    max_move = max(min_move + 1, len(mainline_moves) - 5)
-    if max_move <= min_move:
-        max_move = min(len(mainline_moves), min_move + 10)
-
-    # Apply moves up to the random point
-    move_count = random.randint(min_move, max_move)
-    for move in mainline_moves[:move_count]:
-        board.push(move)
-
-    return board.fen(), board
-
-
-def prepare_chess_dataset() -> Dataset:
-    """
-    Create a dataset of chess positions from games
-
-    Gets a random position
-
-    """
-    dataset = load_dataset(
-        "Icannos/lichess_games", streaming=True, trust_remote_code=True
-    )
-    positions = []
-    count = 0
-
-    pbar = tqdm(total=NUM_SAMPLES, desc="Loading chess positions")
-    for row in dataset["train"]:
-        if count >= NUM_SAMPLES:
-            break
-        try:
-            fen, _ = get_random_position(row)
-            positions.append(fen)
-            count += 1
-            pbar.update(1)
-        except Exception as e:
-            tqdm.write(f"Error in game {count}: {e}")
-
-    pbar.close()
-    return Dataset.from_dict({"fen": positions})
-
-
 def is_valid_uci_format(move_str: str) -> bool:
     """Check if a string is in valid UCI move format (e.g., e2e4)"""
     try:
@@ -205,7 +150,7 @@ def log_generation_results(
     responses,
     extracted_moves,
     move_rewards,
-    board_fen,
+    fen,
     initial_engine_scores,
     after_move_engine_scores,
     centipawn_losses,
@@ -237,7 +182,7 @@ def log_generation_results(
 
         # Log detailed information to the log file
         logging.info(f"\n==== GENERATION {i} COMPLETE SUMMARY ====")
-        logging.info(f"BOARD POSITION: {board_fen[i]}")
+        logging.info(f"BOARD POSITION: {fen[i]}")
         logging.info(f"RESPONSE:\n{responses[i]}")
         logging.info(f"EXTRACTED MOVE: '{move}'")
         logging.info(
@@ -257,7 +202,7 @@ def log_generation_results(
         logging.info("=" * 40)
 
 
-def engine_analysis_reward(prompts, completions, board_fen, **kwargs) -> List[float]:
+def engine_analysis_reward(prompts, completions, fen, **kwargs) -> List[float]:
     """
     Reward based on how good the suggested move is according to the engine.
     Uses centipawn loss to evaluate move quality.
@@ -280,7 +225,7 @@ def engine_analysis_reward(prompts, completions, board_fen, **kwargs) -> List[fl
 
     for i, move in enumerate(extracted_moves):
         move = move.strip()
-        board = chess.Board(board_fen[i])
+        board = chess.Board(fen[i])
 
         # Skip evaluation for invalid moves
         if not move or not is_valid_uci_format(move) or not is_legal_move(move, board):
@@ -338,7 +283,7 @@ def engine_analysis_reward(prompts, completions, board_fen, **kwargs) -> List[fl
         responses,
         extracted_moves,
         move_rewards,
-        board_fen,
+        fen,
         initial_engine_scores,
         after_move_engine_scores,
         centipawn_losses,
@@ -349,7 +294,7 @@ def engine_analysis_reward(prompts, completions, board_fen, **kwargs) -> List[fl
     return move_rewards
 
 
-def legal_move_reward(completions, board_fen, **kwargs) -> List[float]:
+def legal_move_reward(completions, fen, **kwargs) -> List[float]:
     """Reward function that checks if the move is legal"""
     responses = [completion[0]["content"] for completion in completions]
     extracted_moves = [extract_answer(r) for r in responses]
@@ -359,7 +304,7 @@ def legal_move_reward(completions, board_fen, **kwargs) -> List[float]:
 
     for i, move in enumerate(extracted_moves):
         move = move.strip()
-        board = chess.Board(board_fen[i])
+        board = chess.Board(fen[i])
 
         legal = is_legal_move(move, board)
         rewards.append(LEGAL_MOVE_WEIGHT if legal else 0.0)
@@ -371,7 +316,7 @@ def legal_move_reward(completions, board_fen, **kwargs) -> List[float]:
     return rewards
 
 
-def valid_uci_reward(completions, board_fen, **kwargs) -> List[float]:
+def valid_uci_reward(completions, fen, **kwargs) -> List[float]:
     """Reward function that checks if the move is a valid UCI format"""
     responses = [completion[0]["content"] for completion in completions]
     extracted_moves = [extract_answer(r) for r in responses]
@@ -381,7 +326,7 @@ def valid_uci_reward(completions, board_fen, **kwargs) -> List[float]:
 
     for i, move in enumerate(extracted_moves):
         move = move.strip()
-        board = chess.Board(board_fen[i])
+        board = chess.Board(fen[i])
 
         valid_uci = is_valid_uci_format(move)
         valid_uci_results.append(valid_uci)
@@ -426,28 +371,61 @@ def xmlcount_reward(completions, **kwargs) -> List[float]:
     return rewards
 
 
-def prepare_data_and_model():
-    tqdm.write("Preparing dataset...")
-    dataset = prepare_chess_dataset()
+def get_random_position(row) -> Tuple[str, chess.Board]:
+    """Extract a random position from a chess game"""
+    pgn = io.StringIO(row["text"])
+    game = chess.pgn.read_game(pgn)
+    if not game:
+        return chess.STARTING_FEN, chess.Board()
 
-    def format_dataset(example):
+    board = game.board()
+    mainline_moves = list(game.mainline_moves())
+    if not mainline_moves:
+        return chess.STARTING_FEN, board
+
+    # Choose a random point in the game (not too early, not too late)
+    min_move = min(5, len(mainline_moves) // 5)
+    max_move = max(min_move + 1, len(mainline_moves) - 5)
+    if max_move <= min_move:
+        max_move = min(len(mainline_moves), min_move + 10)
+
+    # Apply moves up to the random point
+    move_count = random.randint(min_move, max_move)
+    for move in mainline_moves[:move_count]:
+        board.push(move)
+
+    return board.fen()
+
+
+def prepare_data_and_model():
+    def format_dataset(row):
         """Format dataset for GRPO training"""
-        # Store FEN String
         return {
             "prompt": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {
                     "role": "user",
-                    "content": f"Analyze this chess position and give the best move: {example['fen']}",
+                    "content": f"Analyze this chess position and give the best move: {row['fen']}",
                 },
             ],
-            "board_fen": example["fen"],
+            "fen": row["fen"],
         }
 
-    train_dataset = dataset.map(format_dataset)
-    tqdm.write("Dataset prepared successfully!")
+    dataset = load_dataset(
+        "Icannos/lichess_games",
+        streaming=True,
+        trust_remote_code=True,
+    )
+    positions = []
+    for _, row in tqdm(
+        zip(range(NUM_SAMPLES), dataset["train"]),
+        desc="Loading chess positions",
+    ):
+        positions.append(get_random_position(row))
 
-    tqdm.write("Setting up model...")
+    dataset = Dataset.from_dict({"fen": positions})
+    dataset = dataset.map(format_dataset)
+
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=MODEL,
         max_seq_length=MAX_SEQ_LENGTH,
@@ -474,11 +452,11 @@ def prepare_data_and_model():
         random_state=3407,
     )
 
-    return model, tokenizer, train_dataset
+    return model, tokenizer, dataset
 
 
 # Train the model using GRPO
-def train_model(model, tokenizer, train_dataset):
+def train_model(model, tokenizer, dataset):
     from trl import GRPOConfig, GRPOTrainer
 
     training_args = GRPOConfig(
@@ -518,7 +496,7 @@ def train_model(model, tokenizer, train_dataset):
             engine_analysis_reward,
         ],
         args=training_args,
-        train_dataset=train_dataset,
+        train_dataset=dataset,
     )
 
     print("Starting training...")
@@ -544,8 +522,8 @@ if __name__ == "__main__":
 
     login()
 
-    model, tokenizer, train_dataset = prepare_data_and_model()
-    model = train_model(model, tokenizer, train_dataset)
+    model, tokenizer, dataset = prepare_data_and_model()
+    model = train_model(model, tokenizer, dataset)
     push_to_hub(model, tokenizer, "tommyp111/chess-reasoner")
     engine.quit()
     tqdm.write("Training complete!")
