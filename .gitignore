@@ -9,6 +9,8 @@ wheels/
 # Virtual environments
 .venv
 
+.env
+
 wandb
 unsloth_compiled_cache
 grpo_trainer_lora_model
