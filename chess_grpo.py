@@ -23,7 +23,7 @@ from tqdm import tqdm
 # fmt: off
 # Model settings
 MODEL = "Qwen/Qwen2.5-14B-Instruct"
-LORA_RANK = 128
+LORA_RANK = 64
 GPU_MEMORY_UTILIZATION = 0.9
 CHECKPOINT_PATH = None  # No checkpoint: None
 
