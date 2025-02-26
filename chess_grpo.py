@@ -54,7 +54,7 @@ MODEL = "Qwen/Qwen2.5-3B-Instruct"
 MAX_SEQ_LENGTH = 1024
 LORA_RANK = 8
 GPU_MEMORY_UTILIZATION = 0.95
-CHECKPOINT_PATH = "outputs/checkpoint-5000"  # No checkpoint: None
+CHECKPOINT_PATH = None # "outputs/checkpoint-5000"  # No checkpoint: None
 
 # Dataset settings
 NUM_SAMPLES = 10_000
