@@ -10,13 +10,14 @@ and provide high-quality moves. The model is trained to:
 The training uses Unsloth for efficient fine-tuning and stockfish for evaluation.
 """
 
-import time
 import io
 import logging
 import os
 import random
 import re
+import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import chess
@@ -27,12 +28,14 @@ import wandb
 from datasets import Dataset, load_dataset
 from tqdm import tqdm
 
-log_dir = "logs"
-os.makedirs(log_dir, exist_ok=True)
+log_file = (
+    Path(__file__).parent
+    / "logs"
+    / f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+)
+log_file.parent.mkdir(exist_ok=True)
 logging.basicConfig(
-    filename=os.path.join(
-        log_dir, f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-    ),
+    filename=log_file,
     level=logging.INFO,
     format="%(asctime)s - %(message)s",
 )
@@ -91,7 +94,8 @@ from unsloth import FastLanguageModel, PatchFastRL
 PatchFastRL("GRPO", FastLanguageModel)
 from unsloth import is_bfloat16_supported
 
-wandb.init(project="chess-reasoner", name=f"{MODEL.split('/')[-1]}-chess-grpo")
+wandb.init(project="chess-reasoner")
+wandb.save(log_file, policy="live")
 
 engine = chess.engine.SimpleEngine.popen_uci("stockfish")
 
@@ -212,10 +216,6 @@ def log_generation_results(
     Central logging function for generation results that is tqdm-compatible.
     Logs both to file and to console with tqdm-safe output.
     """
-    # Prepare summary for tqdm-compatible output
-    summary_lines = []
-    summary_lines.append("\n--- Generation Summary ---")
-
     for i in range(len(extracted_moves)):
         valid_format = i < len(format_results) and format_results[i]
         xml_score = xml_structure_scores[i] if i < len(xml_structure_scores) else 0.0
