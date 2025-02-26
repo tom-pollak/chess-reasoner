@@ -1,13 +1,5 @@
 """
-Chess Reasoner GRPO Training (Clean Implementation)
-
-This script trains a model using GRPO to reason about chess positions
-and provide high-quality moves. The model is trained to:
-1. Generate reasoning about the chess position in <reasoning> tags
-2. Provide the best move in <answer> tags
-3. Get verified by a chess engine to determine the quality of the move
-
-The training uses Unsloth for efficient fine-tuning and stockfish for evaluation.
+Chess Reasoner GRPO Training
 """
 
 import io
@@ -18,7 +10,6 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
 
 import chess
 import chess.engine
@@ -28,6 +19,11 @@ import wandb
 from datasets import Dataset, load_dataset
 from tqdm import tqdm
 
+# Can I push to HF
+if os.environ.get("HF_TOKEN") is None:
+    raise ValueError("HF_TOKEN not found! Please set")
+
+# Logging
 log_file = (
     Path(__file__).parent
     / "logs"
@@ -116,6 +112,8 @@ XML_FORMAT = """\
 {answer}
 """
 
+# ======== GRPO REWARD FNS ========
+
 
 def extract_answer(text: str) -> str:
     """Extract the answer (move) which comes after the </think> tag"""
@@ -143,66 +141,84 @@ def is_legal_move(move_str: str, board: chess.Board) -> bool:
         return False
 
 
-## GRPO Reward Functions
+def count_xml(text) -> float:
+    """Count XML tags for partial reward"""
+    count = 0
+    if text.count("<think>\n") == 1:
+        count += XML_COUNT_REWARD_WEIGHT / 2
+    if text.count("\n</think>\n") == 1:
+        count += XML_COUNT_REWARD_WEIGHT / 2
+    return count
 
 
-def log_generation_results(
-    responses,
-    extracted_moves,
-    move_rewards,
-    fen,
-    initial_engine_scores,
-    after_move_engine_scores,
-    centipawn_losses,
-    best_moves,
-    engine_time,
-):
-    """
-    Central logging function for generation results that is tqdm-compatible.
-    Logs both to file and to console with tqdm-safe output.
-    """
-    for i in range(len(extracted_moves)):
-        valid_format = i < len(format_results) and format_results[i]
-        xml_score = xml_structure_scores[i] if i < len(xml_structure_scores) else 0.0
-        legal = legal_checks[i] if i < len(legal_checks) else False
-        valid_uci = valid_uci_checks[i] if i < len(valid_uci_checks) else False
-        move = extracted_moves[i]
-        quality = move_rewards[i] if i < len(move_rewards) else 0.0
+def xmlcount_reward(completions, **kwargs) -> list[float]:
+    """Reward function for having correct XML tags"""
+    contents = [completion[0]["content"] for completion in completions]
+    rewards = [count_xml(c) for c in contents]
 
-        symbol_fmt = lambda b: "✓" if b else "✗"
-        tqdm.write(
-            f"Gen {i}: Move: {move or '-'} | "
-            f"Format: {symbol_fmt(valid_format)} | "
-            f"XML: {symbol_fmt(xml_score == XML_COUNT_REWARD_WEIGHT)} | "
-            f"Valid UCI: {symbol_fmt(valid_uci)} | "
-            f"Legal: {symbol_fmt(legal)} | "
-            f"Quality: {quality:.2f} | "
-            f"Engine Time: {engine_time:.2f}s"
-        )
+    global xml_structure_scores
+    xml_structure_scores = rewards
 
-        # Log detailed information to the log file
-        logging.info(f"\n==== GENERATION {i} COMPLETE SUMMARY ====")
-        logging.info(f"BOARD POSITION: {fen[i]}")
-        logging.info(f"RESPONSE:\n{responses[i]}")
-        logging.info(f"EXTRACTED MOVE: '{move}'")
-        logging.info(
-            f"FORMAT CORRECT: {format_results[i] if i < len(format_results) else False}"
-        )
-        logging.info(f"XML STRUCTURE SCORE: {xml_score:.2f}")
-        logging.info(f"VALID UCI FORMAT: {valid_uci}")
-        logging.info(f"MOVE LEGAL: {legal}")
-        logging.info(f"MOVE QUALITY: {quality:.2f}")
-        logging.info(f"ENGINE TIME: {engine_time:.2f}")
-
-        if move and legal:
-            logging.info(f"INITIAL SCORE: {initial_engine_scores[i]}")
-            logging.info(f"AFTER MOVE SCORE: {after_move_engine_scores[i]}")
-            logging.info(f"CENTIPAWN LOSS: {centipawn_losses[i]}")
-            logging.info(f"ENGINE'S BEST MOVE: {best_moves[i].uci()}")
-        logging.info("=" * 40)
+    return rewards
 
 
-def engine_analysis_reward(prompts, completions, fen, **kwargs) -> List[float]:
+def soft_format_reward(completions, **kwargs) -> list[float]:
+    """Reward function that checks if the completion has the correct format"""
+    pattern = r"<think>.*?</think>\s*\S+"  # <think> tags followed by non-whitespace (the move)
+    responses = [completion[0]["content"] for completion in completions]
+    matches = [re.search(pattern, r, re.DOTALL) is not None for r in responses]
+
+    global format_results
+    format_results = matches
+
+    return [SOFT_FORMAT_REWARD_WEIGHT if match else 0.0 for match in matches]
+
+
+def valid_uci_reward(completions, fen, **kwargs) -> list[float]:
+    """Reward function that checks if the move is a valid UCI format"""
+    responses = [completion[0]["content"] for completion in completions]
+    extracted_moves = [extract_answer(r) for r in responses]
+
+    rewards = []
+    valid_uci_results = []
+
+    for i, move in enumerate(extracted_moves):
+        move = move.strip()
+        board = chess.Board(fen[i])
+
+        valid_uci = is_valid_uci_format(move)
+        valid_uci_results.append(valid_uci)
+        rewards.append(UCI_FORMAT_WEIGHT if valid_uci else 0.0)
+
+    global valid_uci_checks
+    valid_uci_checks = valid_uci_results
+
+    return rewards
+
+
+def legal_move_reward(completions, fen, **kwargs) -> list[float]:
+    """Reward function that checks if the move is legal"""
+    responses = [completion[0]["content"] for completion in completions]
+    extracted_moves = [extract_answer(r) for r in responses]
+
+    rewards = []
+    legality_results = []
+
+    for i, move in enumerate(extracted_moves):
+        move = move.strip()
+        board = chess.Board(fen[i])
+
+        legal = is_legal_move(move, board)
+        rewards.append(LEGAL_MOVE_WEIGHT if legal else 0.0)
+        legality_results.append(legal)
+
+    global legal_checks
+    legal_checks = legality_results
+
+    return rewards
+
+
+def engine_analysis_reward(prompts, completions, fen, **kwargs) -> list[float]:
     """
     Reward based on how good the suggested move is according to the engine.
     Uses centipawn loss to evaluate move quality.
@@ -294,84 +310,66 @@ def engine_analysis_reward(prompts, completions, fen, **kwargs) -> List[float]:
     return move_rewards
 
 
-def legal_move_reward(completions, fen, **kwargs) -> List[float]:
-    """Reward function that checks if the move is legal"""
-    responses = [completion[0]["content"] for completion in completions]
-    extracted_moves = [extract_answer(r) for r in responses]
-
-    rewards = []
-    legality_results = []
-
-    for i, move in enumerate(extracted_moves):
-        move = move.strip()
-        board = chess.Board(fen[i])
-
-        legal = is_legal_move(move, board)
-        rewards.append(LEGAL_MOVE_WEIGHT if legal else 0.0)
-        legality_results.append(legal)
-
-    global legal_checks
-    legal_checks = legality_results
-
-    return rewards
+# =========================================
 
 
-def valid_uci_reward(completions, fen, **kwargs) -> List[float]:
-    """Reward function that checks if the move is a valid UCI format"""
-    responses = [completion[0]["content"] for completion in completions]
-    extracted_moves = [extract_answer(r) for r in responses]
+def log_generation_results(
+    responses,
+    extracted_moves,
+    move_rewards,
+    fen,
+    initial_engine_scores,
+    after_move_engine_scores,
+    centipawn_losses,
+    best_moves,
+    engine_time,
+):
+    """
+    Central logging function for generation results that is tqdm-compatible.
+    Logs both to file and to console with tqdm-safe output.
+    """
+    for i in range(len(extracted_moves)):
+        valid_format = i < len(format_results) and format_results[i]
+        xml_score = xml_structure_scores[i] if i < len(xml_structure_scores) else 0.0
+        legal = legal_checks[i] if i < len(legal_checks) else False
+        valid_uci = valid_uci_checks[i] if i < len(valid_uci_checks) else False
+        move = extracted_moves[i]
+        quality = move_rewards[i] if i < len(move_rewards) else 0.0
 
-    rewards = []
-    valid_uci_results = []
+        symbol_fmt = lambda b: "✓" if b else "✗"
+        tqdm.write(
+            f"Gen {i}: Move: {move or '-'} | "
+            f"Format: {symbol_fmt(valid_format)} | "
+            f"XML: {symbol_fmt(xml_score == XML_COUNT_REWARD_WEIGHT)} | "
+            f"Valid UCI: {symbol_fmt(valid_uci)} | "
+            f"Legal: {symbol_fmt(legal)} | "
+            f"Quality: {quality:.2f} | "
+            f"Engine Time: {engine_time:.2f}s"
+        )
 
-    for i, move in enumerate(extracted_moves):
-        move = move.strip()
-        board = chess.Board(fen[i])
+        # Log detailed information to the log file
+        logging.info(f"\n==== GENERATION {i} COMPLETE SUMMARY ====")
+        logging.info(f"BOARD POSITION: {fen[i]}")
+        logging.info(f"RESPONSE:\n{responses[i]}")
+        logging.info(f"EXTRACTED MOVE: '{move}'")
+        logging.info(
+            f"FORMAT CORRECT: {format_results[i] if i < len(format_results) else False}"
+        )
+        logging.info(f"XML STRUCTURE SCORE: {xml_score:.2f}")
+        logging.info(f"VALID UCI FORMAT: {valid_uci}")
+        logging.info(f"MOVE LEGAL: {legal}")
+        logging.info(f"MOVE QUALITY: {quality:.2f}")
+        logging.info(f"ENGINE TIME: {engine_time:.2f}")
 
-        valid_uci = is_valid_uci_format(move)
-        valid_uci_results.append(valid_uci)
-        rewards.append(UCI_FORMAT_WEIGHT if valid_uci else 0.0)
-
-    global valid_uci_checks
-    valid_uci_checks = valid_uci_results
-
-    return rewards
-
-
-def soft_format_reward(completions, **kwargs) -> List[float]:
-    """Reward function that checks if the completion has the correct format"""
-    pattern = r"<think>.*?</think>\s*\S+"  # <think> tags followed by non-whitespace (the move)
-    responses = [completion[0]["content"] for completion in completions]
-    matches = [re.search(pattern, r, re.DOTALL) is not None for r in responses]
-
-    global format_results
-    format_results = matches
-
-    return [SOFT_FORMAT_REWARD_WEIGHT if match else 0.0 for match in matches]
-
-
-def count_xml(text) -> float:
-    """Count XML tags for partial reward"""
-    count = 0
-    if text.count("<think>\n") == 1:
-        count += XML_COUNT_REWARD_WEIGHT / 2
-    if text.count("\n</think>\n") == 1:
-        count += XML_COUNT_REWARD_WEIGHT / 2
-    return count
+        if move and legal:
+            logging.info(f"INITIAL SCORE: {initial_engine_scores[i]}")
+            logging.info(f"AFTER MOVE SCORE: {after_move_engine_scores[i]}")
+            logging.info(f"CENTIPAWN LOSS: {centipawn_losses[i]}")
+            logging.info(f"ENGINE'S BEST MOVE: {best_moves[i].uci()}")
+        logging.info("=" * 40)
 
 
-def xmlcount_reward(completions, **kwargs) -> List[float]:
-    """Reward function for having correct XML tags"""
-    contents = [completion[0]["content"] for completion in completions]
-    rewards = [count_xml(c) for c in contents]
-
-    global xml_structure_scores
-    xml_structure_scores = rewards
-
-    return rewards
-
-
-def get_random_position(row) -> Tuple[str, chess.Board]:
+def get_random_position(row) -> tuple[str, chess.Board]:
     """Extract a random position from a chess game"""
     pgn = io.StringIO(row["text"])
     game = chess.pgn.read_game(pgn)
@@ -518,10 +516,6 @@ def push_to_hub(model, tokenizer, repo_id):
 
 
 if __name__ == "__main__":
-    from huggingface_hub import login
-
-    login()
-
     model, tokenizer, dataset = prepare_data_and_model()
     model = train_model(model, tokenizer, dataset)
     push_to_hub(model, tokenizer, "tommyp111/chess-reasoner")
