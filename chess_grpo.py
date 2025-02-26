@@ -24,11 +24,11 @@ from tqdm import tqdm
 # Model settings
 MODEL = "Qwen/Qwen2.5-14B-Instruct"
 LORA_RANK = 32
-GPU_MEMORY_UTILIZATION = 0.7
+GPU_MEMORY_UTILIZATION = 0.85
 CHECKPOINT_PATH = None  # No checkpoint: None
 
 # Generation length settings
-MAX_SEQ_LENGTH = 1024
+MAX_SEQ_LENGTH = 1280
 MAX_PROMPT_LENGTH = 256
 MAX_COMPLETION_LENGTH = MAX_SEQ_LENGTH - MAX_PROMPT_LENGTH
 
