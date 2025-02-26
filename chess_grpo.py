@@ -79,7 +79,7 @@ LEGAL_MOVE_WEIGHT = 0.5          # Legal move
 MOVE_QUALITY_WEIGHT = 1.         # Good move quality
 
 # Engine settings
-ENGINE_ANALYSIS_TIME = 0.5  # Time limit for engine analysis in seconds
+ENGINE_ANALYSIS_TIME = 4.  # Time limit for engine analysis in seconds
 # fmt: on
 # =========================================
 
@@ -401,7 +401,6 @@ def xmlcount_reward(completions, **kwargs) -> List[float]:
     return rewards
 
 
-# Main function to prepare dataset and model
 def prepare_data_and_model():
     print("Preparing dataset...")
     dataset = prepare_chess_dataset()
