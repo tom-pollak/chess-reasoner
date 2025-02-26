@@ -52,6 +52,7 @@ MODEL = "Qwen/Qwen2.5-3B-Instruct"
 MAX_SEQ_LENGTH = 1024
 LORA_RANK = 8
 GPU_MEMORY_UTILIZATION = 0.95
+CHECKPOINT_PATH = "outputs/checkpoint-5000"  # No checkpoint: None
 
 # Dataset settings
 NUM_SAMPLES = 10_000
@@ -497,11 +498,7 @@ def train_model(model, tokenizer, train_dataset):
     )
 
     print("Starting training...")
-    try:
-        trainer.train()
-    except Exception as e:
-        print(f"Error during training: {e}")
-        raise e
+    trainer.train(resume_from_checkpoint=CHECKPOINT_PATH)
 
     # Save the trained model
     model.save_lora("chess_reasoner_llama_8b_lora")
