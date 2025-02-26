@@ -24,6 +24,7 @@ import chess.pgn
 import torch
 import wandb
 from datasets import Dataset, load_dataset
+from tqdm import tqdm
 
 log_dir = "logs"
 os.makedirs(log_dir, exist_ok=True)
@@ -44,6 +45,7 @@ initial_engine_scores = []
 after_move_engine_scores = []
 centipawn_losses = []
 best_moves = []
+
 
 # ======== CONFIGURATION PARAMETERS ========
 # fmt: off
@@ -101,7 +103,7 @@ def setup_engine() -> chess.engine.SimpleEngine:
 
 
 engine = setup_engine()
-print("Chess engine initialized successfully!")
+tqdm.write("Chess engine initialized successfully!")
 
 SYSTEM_PROMPT = """
 You are a chess expert. Given a chess position in FEN notation, analyze it and suggest the best move.
@@ -125,44 +127,36 @@ XML_FORMAT = """\
 
 def extract_answer(text: str) -> str:
     """Extract the answer (move) which comes after the </think> tag"""
-    try:
-        parts = text.split("</think>")
-        if len(parts) == 1:
-            return ""
-        return "".join(parts[-1].split())
-    except Exception as e:
-        print(f"Error extracting answer: {e}")
+    parts = text.split("</think>")
+    if len(parts) == 1:
         return ""
+    return "".join(parts[-1].split())
 
 
 def get_random_position(row) -> Tuple[str, chess.Board]:
     """Extract a random position from a chess game"""
-    try:
-        pgn = io.StringIO(row["text"])
-        game = chess.pgn.read_game(pgn)
-        if not game:
-            return chess.STARTING_FEN, chess.Board()
-
-        board = game.board()
-        mainline_moves = list(game.mainline_moves())
-        if not mainline_moves:
-            return chess.STARTING_FEN, board
-
-        # Choose a random point in the game (not too early, not too late)
-        min_move = min(5, len(mainline_moves) // 5)
-        max_move = max(min_move + 1, len(mainline_moves) - 5)
-        if max_move <= min_move:
-            max_move = min(len(mainline_moves), min_move + 10)
-
-        # Apply moves up to the random point
-        move_count = random.randint(min_move, max_move)
-        for move in mainline_moves[:move_count]:
-            board.push(move)
-
-        return board.fen(), board
-    except Exception as e:
-        print(f"Error processing game: {e}")
+    pgn = io.StringIO(row["text"])
+    game = chess.pgn.read_game(pgn)
+    if not game:
         return chess.STARTING_FEN, chess.Board()
+
+    board = game.board()
+    mainline_moves = list(game.mainline_moves())
+    if not mainline_moves:
+        return chess.STARTING_FEN, board
+
+    # Choose a random point in the game (not too early, not too late)
+    min_move = min(5, len(mainline_moves) // 5)
+    max_move = max(min_move + 1, len(mainline_moves) - 5)
+    if max_move <= min_move:
+        max_move = min(len(mainline_moves), min_move + 10)
+
+    # Apply moves up to the random point
+    move_count = random.randint(min_move, max_move)
+    for move in mainline_moves[:move_count]:
+        board.push(move)
+
+    return board.fen(), board
 
 
 def prepare_chess_dataset() -> Dataset:
@@ -177,6 +171,8 @@ def prepare_chess_dataset() -> Dataset:
     )
     positions = []
     count = 0
+
+    pbar = tqdm(total=NUM_SAMPLES, desc="Loading chess positions")
     for row in dataset["train"]:
         if count >= NUM_SAMPLES:
             break
@@ -184,11 +180,11 @@ def prepare_chess_dataset() -> Dataset:
             fen, _ = get_random_position(row)
             positions.append(fen)
             count += 1
-            if count % 100 == 0:
-                print(f"Processed {count} positions...")
+            pbar.update(1)
         except Exception as e:
-            print(f"Error in game {count}: {e}")
+            tqdm.write(f"Error in game {count}: {e}")
 
+    pbar.close()
     return Dataset.from_dict({"fen": positions})
 
 
@@ -213,14 +209,80 @@ def is_valid_move(move_str: str, board: chess.Board) -> bool:
 ## GRPO Reward Functions
 
 
+def log_generation_results(
+    responses,
+    extracted_moves,
+    move_rewards,
+    board_fen,
+    initial_engine_scores=None,
+    after_move_engine_scores=None,
+    centipawn_losses=None,
+    best_moves=None,
+):
+    """
+    Central logging function for generation results that is tqdm-compatible.
+    Logs both to file and to console with tqdm-safe output.
+    """
+    # Prepare summary for tqdm-compatible output
+    summary_lines = []
+    summary_lines.append("\n--- Generation Summary ---")
+
+    for i in range(len(extracted_moves)):
+        valid_format = i < len(format_results) and format_results[i]
+        xml_score = xml_structure_scores[i] if i < len(xml_structure_scores) else 0.0
+        legal = legal_checks[i] if i < len(legal_checks) else False
+        valid_uci = valid_uci_checks[i] if i < len(valid_uci_checks) else False
+        move = extracted_moves[i]
+        quality = move_rewards[i] if i < len(move_rewards) else 0.0
+
+        symbol_fmt = lambda b: "✓" if b else "✗"
+        tqdm.write(
+            f"Gen {i}: Move: {move or '-'} | "
+            f"Format: {symbol_fmt(valid_format)} | "
+            f"XML: {symbol_fmt(xml_score == XML_COUNT_REWARD_WEIGHT)} | "
+            f"Valid UCI: {symbol_fmt(valid_uci)} | "
+            f"Legal: {symbol_fmt(legal)} | "
+            f"Quality: {quality:.2f}"
+        )
+
+        # Log detailed information to the log file
+        logging.info(f"\n==== GENERATION {i} COMPLETE SUMMARY ====")
+        logging.info(f"RESPONSE:\n{responses[i]}")
+        logging.info(f"EXTRACTED MOVE: '{move}'")
+        logging.info(
+            f"FORMAT CORRECT: {format_results[i] if i < len(format_results) else False}"
+        )
+        logging.info(f"XML STRUCTURE SCORE: {xml_score:.2f}")
+        logging.info(f"VALID UCI FORMAT: {valid_uci}")
+        logging.info(f"MOVE LEGAL: {legal}")
+        logging.info(f"MOVE QUALITY: {quality:.2f}")
+
+        if (
+            move
+            and legal
+            and initial_engine_scores
+            and i < len(initial_engine_scores)
+            and initial_engine_scores[i] is not None
+        ):
+            logging.info(f"INITIAL SCORE: {initial_engine_scores[i]}")
+            logging.info(f"AFTER MOVE SCORE: {after_move_engine_scores[i]}")
+            logging.info(f"CENTIPAWN LOSS: {centipawn_losses[i]}")
+            logging.info(f"BOARD POSITION: {board_fen[i]}")
+            if best_moves and i < len(best_moves) and best_moves[i]:
+                logging.info(f"ENGINE'S BEST MOVE: {best_moves[i].uci()}")
+        logging.info("=" * 40)
+
+
 def engine_analysis_reward(prompts, completions, board_fen, **kwargs) -> List[float]:
     """
     Reward based on how good the suggested move is according to the engine.
     Uses centipawn loss to evaluate move quality.
+    This is the final reward function, so it's responsible for calling the logging function.
     """
     global format_results, xml_structure_scores, legal_checks, valid_uci_checks
+    global initial_engine_scores, after_move_engine_scores, centipawn_losses, best_moves
 
-    # Create arrays to store evaluation metrics for logging
+    # Reset global arrays to store evaluation metrics for logging
     initial_engine_scores = []
     after_move_engine_scores = []
     centipawn_losses = []
@@ -282,44 +344,17 @@ def engine_analysis_reward(prompts, completions, board_fen, **kwargs) -> List[fl
 
         move_rewards.append(reward * MOVE_QUALITY_WEIGHT)
 
-    print("\n--- Generation Summary ---")
-    for i in range(len(extracted_moves)):
-        valid_format = i < len(format_results) and format_results[i]
-        xml_score = xml_structure_scores[i] if i < len(xml_structure_scores) else 0.0
-        legal = legal_checks[i] if i < len(legal_checks) else False
-        valid_uci = valid_uci_checks[i] if i < len(valid_uci_checks) else False
-        move = extracted_moves[i]
-        quality = move_rewards[i]
-
-        symbol_fmt = lambda b: "✓" if b else "✗"
-        print(
-            f"Gen {i}: Move: {move or '-'} | "
-            f"Format: {symbol_fmt(valid_format)} | "
-            f"XML: {symbol_fmt(xml_score == XML_COUNT_REWARD_WEIGHT)} | "
-            f"Valid UCI: {symbol_fmt(valid_uci)} | "
-            f"Legal: {symbol_fmt(legal)} | "
-            f"Quality: {quality:.2f}"
-        )
-
-        logging.info(f"\n==== GENERATION {i} COMPLETE SUMMARY ====")
-        logging.info(f"RESPONSE:\n{responses[i]}")
-        logging.info(f"EXTRACTED MOVE: '{move}'")
-        logging.info(
-            f"FORMAT CORRECT: {format_results[i] if i < len(format_results) else False}"
-        )
-        logging.info(f"XML STRUCTURE SCORE: {xml_score:.2f}")
-        logging.info(f"VALID UCI FORMAT: {valid_uci}")
-        logging.info(f"MOVE LEGAL: {legal}")
-        logging.info(f"MOVE QUALITY: {quality:.2f}")
-
-        if move and legal and i < len(initial_engine_scores) and initial_engine_scores[i] is not None:
-            logging.info(f"INITIAL SCORE: {initial_engine_scores[i]}")
-            logging.info(f"AFTER MOVE SCORE: {after_move_engine_scores[i]}")
-            logging.info(f"CENTIPAWN LOSS: {centipawn_losses[i]}")
-            logging.info(f"BOARD POSITION: {board_fen[i]}")
-            if best_moves[i]:
-                logging.info(f"ENGINE'S BEST MOVE: {best_moves[i].uci()}")
-        logging.info("=" * 40)
+    # Log results using our centralized logging function
+    log_generation_results(
+        responses,
+        extracted_moves,
+        move_rewards,
+        board_fen,
+        initial_engine_scores,
+        after_move_engine_scores,
+        centipawn_losses,
+        best_moves,
+    )
 
     return move_rewards
 
@@ -402,7 +437,7 @@ def xmlcount_reward(completions, **kwargs) -> List[float]:
 
 
 def prepare_data_and_model():
-    print("Preparing dataset...")
+    tqdm.write("Preparing dataset...")
     dataset = prepare_chess_dataset()
 
     def format_dataset(example):
@@ -420,9 +455,9 @@ def prepare_data_and_model():
         }
 
     train_dataset = dataset.map(format_dataset)
-    print("Dataset prepared successfully!")
+    tqdm.write("Dataset prepared successfully!")
 
-    print("Setting up model...")
+    tqdm.write("Setting up model...")
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=MODEL,
         max_seq_length=MAX_SEQ_LENGTH,
@@ -508,10 +543,10 @@ def train_model(model, tokenizer, train_dataset):
 
 def push_to_hub(model, tokenizer, repo_id):
     """Upload the trained model to Hugging Face Hub"""
-    print(f"Uploading model to Hugging Face Hub: {repo_id}")
+    tqdm.write(f"Uploading model to Hugging Face Hub: {repo_id}")
     model.push_to_hub(repo_id)
     tokenizer.push_to_hub(repo_id)
-    print(f"Successfully uploaded model to: https://huggingface.co/{repo_id}")
+    tqdm.write(f"Successfully uploaded model to: https://huggingface.co/{repo_id}")
 
 
 if __name__ == "__main__":
@@ -523,3 +558,4 @@ if __name__ == "__main__":
     model = train_model(model, tokenizer, train_dataset)
     push_to_hub(model, tokenizer, "tommyp111/chess-reasoner")
     engine.quit()
+    tqdm.write("Training complete!")
