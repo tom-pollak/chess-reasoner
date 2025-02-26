@@ -24,7 +24,7 @@ from tqdm import tqdm
 # Model settings
 MODEL = "Qwen/Qwen2.5-14B-Instruct"
 LORA_RANK = 32
-GPU_MEMORY_UTILIZATION = 0.9
+GPU_MEMORY_UTILIZATION = 0.7
 CHECKPOINT_PATH = None  # No checkpoint: None
 
 # Generation length settings
