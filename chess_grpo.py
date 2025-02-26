@@ -184,7 +184,7 @@ def is_valid_uci_format(move_str: str) -> bool:
         return False
 
 
-def is_valid_move(move_str: str, board: chess.Board) -> bool:
+def is_legal_move(move_str: str, board: chess.Board) -> bool:
     """Check if a move string is valid for the given board position"""
     try:
         move = chess.Move.from_uci(move_str)
@@ -285,13 +285,17 @@ def engine_analysis_reward(prompts, completions, board_fen, **kwargs) -> List[fl
         board = chess.Board(board_fen[i])
 
         # Skip evaluation for invalid moves
-        if not move or not is_valid_uci_format(move) or not is_valid_move(move, board):
+        if not move or not is_valid_uci_format(move) or not is_legal_move(move, board):
             move_rewards.append(0.0)
             initial_engine_scores.append(None)
             after_move_engine_scores.append(None)
             centipawn_losses.append(None)
             best_moves.append(None)
             continue
+
+        import time
+        start_time = time.perf_counter()
+        tqdm.write("DEBUG -- doing engine analyse")
 
         # Engine analysis of current position
         initial_eval = engine.analyse(
@@ -331,6 +335,8 @@ def engine_analysis_reward(prompts, completions, board_fen, **kwargs) -> List[fl
 
         move_rewards.append(reward * MOVE_QUALITY_WEIGHT)
 
+        tqdm.write("DEBUG -- elapsed_time: {time.perf_counter() - start_time}")
+
     # Log results using our centralized logging function
     log_generation_results(
         responses,
@@ -358,7 +364,7 @@ def legal_move_reward(completions, board_fen, **kwargs) -> List[float]:
         move = move.strip()
         board = chess.Board(board_fen[i])
 
-        legal = is_valid_move(move, board)
+        legal = is_legal_move(move, board)
         rewards.append(LEGAL_MOVE_WEIGHT if legal else 0.0)
         legality_results.append(legal)
 
