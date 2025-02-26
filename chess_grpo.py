@@ -40,6 +40,10 @@ format_results = []
 xml_structure_scores = []
 legal_checks = []
 valid_uci_checks = []
+initial_engine_scores = []
+after_move_engine_scores = []
+centipawn_losses = []
+best_moves = []
 
 # ======== CONFIGURATION PARAMETERS ========
 # fmt: off
@@ -167,7 +171,9 @@ def prepare_chess_dataset() -> Dataset:
     Gets a random position
 
     """
-    dataset = load_dataset("Icannos/lichess_games", streaming=True, trust_remote_code=True)
+    dataset = load_dataset(
+        "Icannos/lichess_games", streaming=True, trust_remote_code=True
+    )
     positions = []
     count = 0
     for row in dataset["train"]:
@@ -203,61 +209,21 @@ def is_valid_move(move_str: str, board: chess.Board) -> bool:
         return False
 
 
-def evaluate_move(board: chess.Board, move_str: str) -> float:
-    """
-    Evaluate a chess move using Stockfish engine by comparing position evaluation
-    before and after the move. Returns a score between 0 and 1.
-    """
-    try:
-        move = chess.Move.from_uci(move_str)
-        if move not in board.legal_moves:
-            return 0.0
-
-        initial_result = engine.analyse(
-            board, chess.engine.Limit(time=ENGINE_ANALYSIS_TIME)
-        )
-        best_move = initial_result["pv"][0]
-
-        best_board = board.copy()
-        best_board.push(best_move)
-        best_eval = engine.analyse(
-            best_board, chess.engine.Limit(time=ENGINE_ANALYSIS_TIME)
-        )
-        best_score = best_eval["score"].relative.score(mate_score=10000)
-
-        player_board = board.copy()
-        player_board.push(move)
-        player_eval = engine.analyse(
-            player_board, chess.engine.Limit(time=ENGINE_ANALYSIS_TIME)
-        )
-        player_score = player_eval["score"].relative.score(mate_score=10000)
-
-        eval_diff = player_score - best_score
-
-        # Simple linear scaling:
-        # 0 or positive diff = best move (1.0)
-        # -100 centipawns = decent move (0.5)
-        # -300 centipawns or worse = bad move (0.0)
-        if eval_diff >= 0:
-            return 1.0
-        elif eval_diff < -300:
-            return 0.0
-        else:
-            return 1.0 + (eval_diff / 300.0)
-
-    except Exception:
-        return 0.0
+## GRPO Reward Functions
 
 
-## GRPO Reward Fns
-
-
-def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[float]:
+def engine_analysis_reward(prompts, completions, board_fen, **kwargs) -> List[float]:
     """
     Reward based on how good the suggested move is according to the engine.
-    Uses position evaluation difference before and after the move.
+    Uses centipawn loss to evaluate move quality.
     """
     global format_results, xml_structure_scores, legal_checks, valid_uci_checks
+
+    # Create arrays to store evaluation metrics for logging
+    initial_engine_scores = []
+    after_move_engine_scores = []
+    centipawn_losses = []
+    best_moves = []
 
     responses = [completion[0]["content"] for completion in completions]
     extracted_moves = [extract_answer(r) for r in responses]
@@ -267,8 +233,53 @@ def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[f
     for i, move in enumerate(extracted_moves):
         move = move.strip()
         board = chess.Board(board_fen[i])
-        reward = evaluate_move(board, move) * MOVE_QUALITY_WEIGHT
-        move_rewards.append(reward)
+
+        # Skip evaluation for invalid moves
+        if not move or not is_valid_uci_format(move) or not is_valid_move(move, board):
+            move_rewards.append(0.0)
+            initial_engine_scores.append(None)
+            after_move_engine_scores.append(None)
+            centipawn_losses.append(None)
+            best_moves.append(None)
+            continue
+
+        # Engine analysis of current position
+        initial_eval = engine.analyse(
+            board, chess.engine.Limit(time=ENGINE_ANALYSIS_TIME)
+        )
+        best_move = initial_eval["pv"][0]
+        initial_score = initial_eval["score"].relative.score(mate_score=10000)
+
+        # Make player's move and get new evaluation
+        player_move = chess.Move.from_uci(move)
+        board.push(player_move)
+        player_eval = engine.analyse(
+            board, chess.engine.Limit(time=ENGINE_ANALYSIS_TIME)
+        )
+
+        # Negate because it's from opponent's perspective
+        after_move_score = -player_eval["score"].relative.score(mate_score=10000)
+
+        # Calculate centipawn loss
+        centipawn_loss = initial_score - after_move_score
+
+        initial_engine_scores.append(initial_score)
+        after_move_engine_scores.append(after_move_score)
+        centipawn_losses.append(centipawn_loss)
+        best_moves.append(best_move)
+
+        # Reward scaling
+        # - Less than 300 (bishop / rook blunder) is 0.0
+        # - Best move is 1.0
+        reward = 0.0
+        if centipawn_loss <= 0:
+            reward = 1.0
+        elif centipawn_loss >= 300:
+            reward = 0.0
+        else:
+            reward = 1.0 - (centipawn_loss / 300.0)
+
+        move_rewards.append(reward * MOVE_QUALITY_WEIGHT)
 
     print("\n--- Generation Summary ---")
     for i in range(len(extracted_moves)):
@@ -300,14 +311,13 @@ def move_correctness_reward(prompts, completions, board_fen, **kwargs) -> List[f
         logging.info(f"MOVE LEGAL: {legal}")
         logging.info(f"MOVE QUALITY: {quality:.2f}")
 
-        if move and legal:
-            board = chess.Board(board_fen[i])
-            analysis = engine.analyse(
-                board, chess.engine.Limit(time=ENGINE_ANALYSIS_TIME)
-            )
-            best_move = analysis["pv"][0].uci()
-            logging.info(f"BOARD POSITION: {board.fen()}")
-            logging.info(f"ENGINE'S BEST MOVE: {best_move}")
+        if move and legal and i < len(initial_engine_scores) and initial_engine_scores[i] is not None:
+            logging.info(f"INITIAL SCORE: {initial_engine_scores[i]}")
+            logging.info(f"AFTER MOVE SCORE: {after_move_engine_scores[i]}")
+            logging.info(f"CENTIPAWN LOSS: {centipawn_losses[i]}")
+            logging.info(f"BOARD POSITION: {board_fen[i]}")
+            if best_moves[i]:
+                logging.info(f"ENGINE'S BEST MOVE: {best_moves[i].uci()}")
         logging.info("=" * 40)
 
     return move_rewards
@@ -480,7 +490,7 @@ def train_model(model, tokenizer, train_dataset):
             soft_format_reward,
             legal_move_reward,
             valid_uci_reward,
-            move_correctness_reward,
+            engine_analysis_reward,
         ],
         args=training_args,
         train_dataset=train_dataset,
