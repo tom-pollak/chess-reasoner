@@ -206,11 +206,11 @@ def log_generation_results(
     extracted_moves,
     move_rewards,
     board_fen,
-    initial_engine_scores=None,
-    after_move_engine_scores=None,
-    centipawn_losses=None,
-    best_moves=None,
-    engine_time=0.0,
+    initial_engine_scores,
+    after_move_engine_scores,
+    centipawn_losses,
+    best_moves,
+    engine_time,
 ):
     """
     Central logging function for generation results that is tqdm-compatible.
@@ -237,6 +237,7 @@ def log_generation_results(
 
         # Log detailed information to the log file
         logging.info(f"\n==== GENERATION {i} COMPLETE SUMMARY ====")
+        logging.info(f"BOARD POSITION: {board_fen[i]}")
         logging.info(f"RESPONSE:\n{responses[i]}")
         logging.info(f"EXTRACTED MOVE: '{move}'")
         logging.info(
@@ -248,19 +249,11 @@ def log_generation_results(
         logging.info(f"MOVE QUALITY: {quality:.2f}")
         logging.info(f"ENGINE TIME: {engine_time:.2f}")
 
-        if (
-            move
-            and legal
-            and initial_engine_scores
-            and i < len(initial_engine_scores)
-            and initial_engine_scores[i] is not None
-        ):
+        if move and legal:
             logging.info(f"INITIAL SCORE: {initial_engine_scores[i]}")
             logging.info(f"AFTER MOVE SCORE: {after_move_engine_scores[i]}")
             logging.info(f"CENTIPAWN LOSS: {centipawn_losses[i]}")
-            logging.info(f"BOARD POSITION: {board_fen[i]}")
-            if best_moves and i < len(best_moves) and best_moves[i]:
-                logging.info(f"ENGINE'S BEST MOVE: {best_moves[i].uci()}")
+            logging.info(f"ENGINE'S BEST MOVE: {best_moves[i].uci()}")
         logging.info("=" * 40)
 
 
