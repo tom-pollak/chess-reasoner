@@ -63,7 +63,7 @@ NUM_SAMPLES = 10_000
 LEARNING_RATE = 5e-6
 WEIGHT_DECAY = 0.1
 WARMUP_RATIO = 0.1
-BATCH_SIZE = 2
+BATCH_SIZE = 1
 GRADIENT_ACCUMULATION_STEPS = 1
 NUM_GENERATIONS = 8
 MAX_STEPS = 10_000
@@ -92,29 +92,16 @@ from unsloth import is_bfloat16_supported
 
 wandb.init(project="chess-reasoner", name=f"{MODEL.split('/')[-1]}-chess-grpo")
 
-
-def setup_engine() -> chess.engine.SimpleEngine:
-    try:
-        return chess.engine.SimpleEngine.popen_uci("stockfish")
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            "Stockfish not found. Please install stockfish and make sure it's in your PATH."
-        )
-
-
-engine = setup_engine()
-tqdm.write("Chess engine initialized successfully!")
+engine = chess.engine.SimpleEngine.popen_uci("stockfish")
 
 SYSTEM_PROMPT = """
-You are a chess expert. Given a chess position in FEN notation, analyze it and suggest the best move.
+Given a chess position in FEN notation, analyze it and suggest the best move in UCI notation.
 
 Respond in the following format:
 <think>
-Your analysis here. Keep it brief.
+Your analysis here.
 </think>
-e2e4
-
-First your analysis in <think> tags, then just your move in UCI notation (like e2e4) after the </think> tag.
+Best move in UCI notation (e.g. b7b3) here.
 """
 
 XML_FORMAT = """\
@@ -418,9 +405,9 @@ def soft_format_reward(completions, **kwargs) -> List[float]:
 def count_xml(text) -> float:
     """Count XML tags for partial reward"""
     count = 0
-    if "<think>" in text:
+    if text.count("<think>\n") == 1:
         count += XML_COUNT_REWARD_WEIGHT / 2
-    if "</think>" in text:
+    if text.count("\n</think>\n") == 1:
         count += XML_COUNT_REWARD_WEIGHT / 2
     return count
 
