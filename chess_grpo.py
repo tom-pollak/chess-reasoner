@@ -522,5 +522,5 @@ if __name__ == "__main__":
 
     model, tokenizer, train_dataset = prepare_data_and_model()
     model = train_model(model, tokenizer, train_dataset)
-    push_to_hub(model, tokenizer, "your-username/chess-reasoner")
+    push_to_hub(model, tokenizer, "tommyp111/chess-reasoner")
     engine.quit()
