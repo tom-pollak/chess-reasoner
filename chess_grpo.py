@@ -79,7 +79,7 @@ LEGAL_MOVE_WEIGHT = 0.5          # Legal move
 MOVE_QUALITY_WEIGHT = 1.         # Good move quality
 
 # Engine settings
-ENGINE_ANALYSIS_TIME = 0.2  # Time limit for engine analysis in seconds
+ENGINE_ANALYSIS_TIME = 0.5  # Time limit for engine analysis in seconds
 # fmt: on
 # =========================================
 
