@@ -10,6 +10,7 @@ and provide high-quality moves. The model is trained to:
 The training uses Unsloth for efficient fine-tuning and stockfish for evaluation.
 """
 
+import time
 import io
 import logging
 import os
@@ -205,6 +206,7 @@ def log_generation_results(
     after_move_engine_scores=None,
     centipawn_losses=None,
     best_moves=None,
+    engine_time=0.0,
 ):
     """
     Central logging function for generation results that is tqdm-compatible.
@@ -229,7 +231,8 @@ def log_generation_results(
             f"XML: {symbol_fmt(xml_score == XML_COUNT_REWARD_WEIGHT)} | "
             f"Valid UCI: {symbol_fmt(valid_uci)} | "
             f"Legal: {symbol_fmt(legal)} | "
-            f"Quality: {quality:.2f}"
+            f"Quality: {quality:.2f} |",
+            f"Engine Time: {engine_time:.2f}s",
         )
 
         # Log detailed information to the log file
@@ -243,6 +246,7 @@ def log_generation_results(
         logging.info(f"VALID UCI FORMAT: {valid_uci}")
         logging.info(f"MOVE LEGAL: {legal}")
         logging.info(f"MOVE QUALITY: {quality:.2f}")
+        logging.info(f"ENGINE TIME: {engine_time:.2f}")
 
         if (
             move
@@ -274,6 +278,7 @@ def engine_analysis_reward(prompts, completions, board_fen, **kwargs) -> List[fl
     after_move_engine_scores = []
     centipawn_losses = []
     best_moves = []
+    engine_time = 0.0
 
     responses = [completion[0]["content"] for completion in completions]
     extracted_moves = [extract_answer(r) for r in responses]
@@ -293,9 +298,7 @@ def engine_analysis_reward(prompts, completions, board_fen, **kwargs) -> List[fl
             best_moves.append(None)
             continue
 
-        import time
         start_time = time.perf_counter()
-        tqdm.write("DEBUG -- doing engine analyse")
 
         # Engine analysis of current position
         initial_eval = engine.analyse(
@@ -335,9 +338,9 @@ def engine_analysis_reward(prompts, completions, board_fen, **kwargs) -> List[fl
 
         move_rewards.append(reward * MOVE_QUALITY_WEIGHT)
 
-        tqdm.write("DEBUG -- elapsed_time: {time.perf_counter() - start_time}")
+        engine_time += time.perf_counter() - start_time
 
-    # Log results using our centralized logging function
+    wandb.log({"train/engine_time": engine_time})
     log_generation_results(
         responses,
         extracted_moves,
@@ -347,6 +350,7 @@ def engine_analysis_reward(prompts, completions, board_fen, **kwargs) -> List[fl
         after_move_engine_scores,
         centipawn_losses,
         best_moves,
+        engine_time,
     )
 
     return move_rewards
