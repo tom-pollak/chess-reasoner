@@ -231,7 +231,7 @@ def log_generation_results(
             f"XML: {symbol_fmt(xml_score == XML_COUNT_REWARD_WEIGHT)} | "
             f"Valid UCI: {symbol_fmt(valid_uci)} | "
             f"Legal: {symbol_fmt(legal)} | "
-            f"Quality: {quality:.2f} |"
+            f"Quality: {quality:.2f} | "
             f"Engine Time: {engine_time:.2f}s"
         )
 
@@ -497,7 +497,7 @@ def train_model(model, tokenizer, train_dataset):
         warmup_ratio=WARMUP_RATIO,
         lr_scheduler_type="cosine",
         optim="adamw_8bit",
-        logging_steps=1,
+        logging_steps=None,
         bf16=is_bfloat16_supported(),
         fp16=not is_bfloat16_supported(),
         per_device_train_batch_size=BATCH_SIZE,
