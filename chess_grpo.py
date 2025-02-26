@@ -54,11 +54,11 @@ best_moves = []
 # ======== CONFIGURATION PARAMETERS ========
 # fmt: off
 # Model settings
-MODEL = "Qwen/Qwen2.5-3B-Instruct"
+MODEL = "Qwen/Qwen2.5-14B-Instruct"
 MAX_SEQ_LENGTH = 1024
-LORA_RANK = 8
+LORA_RANK = 128
 GPU_MEMORY_UTILIZATION = 0.95
-CHECKPOINT_PATH = None # "outputs/checkpoint-5000"  # No checkpoint: None
+CHECKPOINT_PATH = None  # No checkpoint: None
 
 # Dataset settings
 NUM_SAMPLES = 10_000
@@ -69,7 +69,7 @@ WEIGHT_DECAY = 0.1
 WARMUP_RATIO = 0.1
 BATCH_SIZE = 1
 GRADIENT_ACCUMULATION_STEPS = 1
-NUM_GENERATIONS = 8
+NUM_GENERATIONS = 4
 MAX_STEPS = 10_000
 SAVE_STEPS = 1000
 
@@ -82,7 +82,7 @@ XML_COUNT_REWARD_WEIGHT = 0.05   # Has think tags
 SOFT_FORMAT_REWARD_WEIGHT = 0.1  # Basic XML format
 UCI_FORMAT_WEIGHT = 0.25         # Valid UCI notation
 LEGAL_MOVE_WEIGHT = 0.5          # Legal move
-MOVE_QUALITY_WEIGHT = 1.         # Good move quality
+MOVE_QUALITY_WEIGHT = 2.         # Good move quality
 
 # Engine settings
 ENGINE_ANALYSIS_TIME = 1.  # Time limit for engine analysis in seconds
