@@ -24,11 +24,11 @@ from tqdm import tqdm
 # Model settings
 MODEL = "Qwen/Qwen2.5-14B-Instruct"
 LORA_RANK = 128
-GPU_MEMORY_UTILIZATION = 0.95
+GPU_MEMORY_UTILIZATION = 0.9
 CHECKPOINT_PATH = None  # No checkpoint: None
 
 # Generation length settings
-MAX_SEQ_LENGTH = 4096
+MAX_SEQ_LENGTH = 2048
 MAX_PROMPT_LENGTH = 256
 MAX_COMPLETION_LENGTH = MAX_SEQ_LENGTH - MAX_PROMPT_LENGTH
 
@@ -53,7 +53,7 @@ LEGAL_MOVE_WEIGHT = 0.5          # Legal move
 MOVE_QUALITY_WEIGHT = 2.         # Good move quality
 
 # Engine settings
-ENGINE_ANALYSIS_TIME = 1.  # Time limit for engine analysis in seconds
+ENGINE_ANALYSIS_TIME = 1.5  # Time limit for engine analysis in seconds
 # fmt: on
 # =========================================
 
