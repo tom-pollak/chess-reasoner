@@ -19,34 +19,6 @@ import wandb
 from datasets import Dataset, load_dataset
 from tqdm import tqdm
 
-# Can I push to HF
-if os.environ.get("HF_TOKEN") is None:
-    raise ValueError("HF_TOKEN not found! Please set")
-
-# Logging
-log_file = (
-    Path(__file__).parent
-    / "logs"
-    / f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-)
-log_file.parent.mkdir(exist_ok=True)
-logging.basicConfig(
-    filename=log_file,
-    level=logging.INFO,
-    format="%(asctime)s - %(message)s",
-)
-
-# Storage for cross-function metrics
-format_results = []
-xml_structure_scores = []
-legal_checks = []
-valid_uci_checks = []
-initial_engine_scores = []
-after_move_engine_scores = []
-centipawn_losses = []
-best_moves = []
-
-
 # ======== CONFIGURATION PARAMETERS ========
 # fmt: off
 # Model settings
@@ -85,16 +57,48 @@ ENGINE_ANALYSIS_TIME = 1.  # Time limit for engine analysis in seconds
 # fmt: on
 # =========================================
 
+# Can I push to HF
+if os.environ.get("HF_TOKEN") is None:
+    raise ValueError("HF_TOKEN not found! Please set")
+
+# Logging
+log_file = (
+    Path(__file__).parent
+    / "logs"
+    / f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+)
+log_file.parent.mkdir(exist_ok=True)
+logging.basicConfig(
+    filename=log_file,
+    level=logging.INFO,
+    format="%(asctime)s - %(message)s",
+)
+
+# Storage for cross-function metrics
+format_results = []
+xml_structure_scores = []
+legal_checks = []
+valid_uci_checks = []
+initial_engine_scores = []
+after_move_engine_scores = []
+centipawn_losses = []
+best_moves = []
+
+
+# Unsloth stuff
 from unsloth import FastLanguageModel, PatchFastRL
 
 PatchFastRL("GRPO", FastLanguageModel)
 from unsloth import is_bfloat16_supported
 
+# Wandb
 wandb.init(project="chess-reasoner")
 wandb.save(log_file, policy="live")
 
+# Stockfish
 engine = chess.engine.SimpleEngine.popen_uci("stockfish")
 
+# Prompts
 SYSTEM_PROMPT = """
 Given a chess position in FEN notation, analyze it and suggest the best move in UCI notation.
 
@@ -518,6 +522,5 @@ def push_to_hub(model, tokenizer, repo_id):
 if __name__ == "__main__":
     model, tokenizer, dataset = prepare_data_and_model()
     model = train_model(model, tokenizer, dataset)
-    push_to_hub(model, tokenizer, "tommyp111/chess-reasoner")
     engine.quit()
-    tqdm.write("Training complete!")
+    push_to_hub(model, tokenizer, "tommyp111/chess-reasoner")
